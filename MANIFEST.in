@@ -1,0 +1,6 @@
+recursive-include feater *.py *.so
+
+include README.md
+include LICENSE
+include pyproject.toml
+include setup.py
