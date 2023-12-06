@@ -1,4 +1,4 @@
-import os, sys, tempfile, subprocess
+import os, sys, tempfile, subprocess, shutil
 import numpy as np
 import pytraj as pt
 
@@ -72,7 +72,9 @@ class StructureProcessor:
     self._write_surf = self.output_settings["write_surf"]
 
   def process_residue_3letter(self, residue):
-    subprocess.check_call(["mkdir", "-p", residue])
+    if __file__ == "/MieT5/tests/FEater/feater/io.py": # TODO: remove this line when doing production
+      print("Running in the editable mode")
+    os.makedirs(os.path.abspath(os.path.abspath(os.path.join(self._output_folder, residue))), exist_ok=True)
     for f_idx in np.arange(self.nr_frames):
       for r_idx in np.arange(self.nr_residues):
         current_residue = self.sequence[r_idx]
@@ -81,10 +83,6 @@ class StructureProcessor:
         # atom_indices = np.arange(current_residue.first_atom_index, current_residue.last_atom_index)
         sub_top = self.topology[current_residue.first_atom_index:current_residue.last_atom_index]
         sub_xyz = self.coordinates[f_idx, current_residue.first_atom_index:current_residue.last_atom_index, :]
-
-        heavy_atom_number = len([i for i in sub_top.atoms if i.element != "H"])
-        if f"{current_residue.name}_{heavy_atom_number}" not in FREQ_CONFIG:
-          print(f"Residue {current_residue.name} has {heavy_atom_number} heavy atoms")
 
         # Write out the temporary residue, and use CAMAPRI to fix the broken residues
         with tempfile.TemporaryDirectory() as tempdir:
@@ -96,11 +94,11 @@ class StructureProcessor:
 
           # Use CAMAPRI to fix the broken residues
           with open(tempf_seq, "w") as tempf:
-            if current_residue.name in HOMOGENEOUS:
+            if current_residue.name in HOMOGENEOUS_LIST:
               tempf.write(f"{current_residue.name}_N_C\nEND\n")
             elif current_residue.name == "HIS":
               tempf.write(f"HID_N_C\nEND\n")
-            elif current_residue.name in HETEROGENEOUS:
+            elif current_residue.name in HETEROGENEOUS_LIST:
               # TODO; Skip temporarily and implement this later
               # TODO: HETEROGENEOUS_LIST = ['ASP', 'CYS', 'GLU', 'HIS', 'LYS']
               tempf.write(f"{current_residue.name}_N_C\nEND\n")
@@ -109,19 +107,27 @@ class StructureProcessor:
                                                   pdb_file = tempf_pdb,
                                                   key_file = tempf_key)
           if len(output_pdb) == 0:
-            print(f"Residue {current_residue.name} is not fixed")
+            print(f"CAMPARI failes to fix the structure of residue {current_residue.name}")
             continue
 
           molhash = hashlib.md5(output_pdb["result_pdb"].encode()).hexdigest()[:8]
-          tmp_prefix = os.path.join(tempdir, "tmpfile")
-          output_prefix = os.path.join(self._output_folder, current_residue.name, f"{current_residue.name}_{heavy_atom_number}_{molhash}")
           try:
             themol = Chem.MolFromPDBBlock(output_pdb["result_pdb"], sanitize=True, removeHs=False)
             themol.SetProp("_Name", f"{current_residue.name}_{molhash}")
+            heavy_atom_number = len([i for i in themol.GetAtoms() if i.GetAtomicNum() > 1])
           except:
             print(f"Residue {current_residue.name} cannot be converted to RDKit mol")
             continue
 
+          if f"{current_residue.name}_{heavy_atom_number}" not in FREQ_CONFIG:
+            print(f"Residue {current_residue.name} has {heavy_atom_number} heavy atoms")
+            continue
+          else:
+            print("-s", end="")
+
+          tmp_prefix = os.path.join(tempdir, "tmpfile")
+          output_prefix = os.path.join(self._output_folder, current_residue.name,
+                                       f"{current_residue.name}_{heavy_atom_number}_{molhash}")
           if self._write_pdb:
             with open(f"{tmp_prefix}.pdb", "w") as f:
               f.write(Chem.MolToPDBBlock(themol))
@@ -131,12 +137,15 @@ class StructureProcessor:
             Chem.MolToMolFile(themol, f"{tmp_prefix}.sdf")
           if self._write_surf:
             mol_to_surf(themol, f"{tmp_prefix}.ply")
-          if os.path.exists(f"{tmp_prefix}.pdb") and os.path.exists(f"{tmp_prefix}.mol2") and os.path.exists(f"{tmp_prefix}.sdf") and os.path.exists(f"{tmp_prefix}.ply"):
-            subprocess.check_call(["cp", f"{tmp_prefix}.pdb", f"{output_prefix}.pdb"])
-            subprocess.check_call(["cp", f"{tmp_prefix}.mol2", f"{output_prefix}.mol2"])
-            subprocess.check_call(["cp", f"{tmp_prefix}.sdf", f"{output_prefix}.sdf"])
-            subprocess.check_call(["cp", f"{tmp_prefix}.ply", f"{output_prefix}.ply"])
-
+          if os.path.exists(f"{tmp_prefix}.pdb"):
+            shutil.copy2(f"{tmp_prefix}.pdb", f"{output_prefix}.pdb")
+          if os.path.exists(f"{tmp_prefix}.mol2"):
+            shutil.copy2(f"{tmp_prefix}.mol2", f"{output_prefix}.mol2")
+          if os.path.exists(f"{tmp_prefix}.sdf"):
+            shutil.copy2(f"{tmp_prefix}.sdf", f"{output_prefix}.sdf")
+          if os.path.exists(f"{tmp_prefix}.ply"):
+            shutil.copy2(f"{tmp_prefix}.ply", f"{output_prefix}.ply")
+    print("\n_______________________")
 
 def mol_to_surf(mol, output_file):
   xyzr_arr = np.zeros((mol.GetNumAtoms(), 4), dtype=np.float32)
@@ -147,9 +156,8 @@ def mol_to_surf(mol, output_file):
     xyzr_arr[i, 1] = pos.y
     xyzr_arr[i, 2] = pos.z
     xyzr_arr[i, 3] = 1
-  siesta.xyzr_to_file(xyzr_arr, output_file)
+  siesta.xyzr_to_file(xyzr_arr, output_file, format="ply", grid_size=0.2, slice_number=300, smooth_step=0)
   return xyzr_arr
-
 
 def write_mol2(mol, filename, resname='UNL'):
   AllChem.ComputeGasteigerCharges(mol)
@@ -244,57 +252,56 @@ def _atom_matches_smarts(atom, smarts):
 
 
 FREQ_CONFIG = [
-  "ALA_10",  # 10 (most) and 12
-  "ARG_24",  # 24
-  "ASN_14",  # 14 (most) and 9
-  "ASP_12",  # 12
-  "CYS_10",  # 10, 11 and 13
+  "GLY_5",
+  "ALA_6",
+  "CYS_7",  # 10, 11 and 13
+  "SER_7",  # 11 (most) and 13, 15, 9
+  "THR_8",  # 14
+  "PRO_8",  # 14 (most) and 15
+  "VAL_8",  # 16
 
-  "GLN_17",  # 17 (most) and 18, 19, 9
-  "GLY_7",   # 7 (most) and 9
-  "GLU_15",  # 15 (most) and 9, 17
-  "HIS_16",  # 16 (most) and 9
-  "ILE_19",  # 19 (most) and 21
+  "MET_9",  # 17 (most) and 19
+  "ASN_9",  # 14 (most) and 9
+  "ASP_9",  # 12
+  "LEU_9",  # 19
+  "ILE_9",  # 19 (most) and 21
+  "LYS_10",  # 22
+  "GLN_10",  # 17 (most) and 18, 19, 9
+  "GLU_10",  # 15 (most) and 9, 17
 
-  "LEU_19",  # 19
-  "LYS_22",  # 22
-  "MET_17",  # 17 (most) and 19
-  "PHE_20",  # 20 (most) and 21, 19
-  "PRO_14",  # 14 (most) and 15
-
-  "SER_11",  # 11 (most) and 13, 15, 9
-  "THR_14",  # 14
-  "TRP_24",  # 24
-  "TYR_21",  # 21
-  "VAL_16",  # 16
+  "HIS_11",  # 16 (most) and 9
+  "ARG_12",  # 24
+  "PHE_12",  # 20 (most) and 21, 19
+  "TYR_13",  # 21
+  "TRP_15",  # 24
 ]
 
-HOMOGENEOUS = {
-  "ALA": 1,
-  "ARG": 1,
-  "ASN": 1,
-  "GLN": 1,
-  "GLY": 1,
-  "ILE": 1,
-  "LEU": 1,
-  "MET": 1,
-  "PHE": 1,
-  "PRO": 1,
-  "SER": 1,
-  "THR": 1,
-  "TRP": 1,
-  "TYR": 1,
-  "VAL": 1
-}
+# HOMOGENEOUS = {
+#   "ALA": 1,
+#   "ARG": 1,
+#   "ASN": 1,
+#   "GLN": 1,
+#   "GLY": 1,
+#   "ILE": 1,
+#   "LEU": 1,
+#   "MET": 1,
+#   "PHE": 1,
+#   "PRO": 1,
+#   "SER": 1,
+#   "THR": 1,
+#   "TRP": 1,
+#   "TYR": 1,
+#   "VAL": 1
+# }
 
 HOMOGENEOUS_LIST = ['ALA', 'ARG', 'ASN', 'GLN', 'GLY', 'ILE', 'LEU', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL']
 HETEROGENEOUS_LIST = ['ASP', 'CYS', 'GLU', 'HIS', 'LYS']
 
-HETEROGENEOUS = {
-  "ASP": 1, # ASH, ASP
-  "CYS": 2, # CYS, CYX
-  "GLU": 1, # GLH, GLU
-  "HIS": 3, # HID, HIE, HIP ? Very special case
-  "LYS": 1, # LYN, LYS
-}
+# HETEROGENEOUS = {
+#   "ASP": 1, # ASH, ASP
+#   "CYS": 2, # CYS, CYX
+#   "GLU": 1, # GLH, GLU
+#   "HIS": 3, # HID, HIE, HIP ? Very special case
+#   "LYS": 1, # LYN, LYS
+# }
 

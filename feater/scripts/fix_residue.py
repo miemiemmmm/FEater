@@ -102,9 +102,9 @@ def fix_residue(target_dir:str, pdb_file:str="", seq_file:str="", key_file:str="
 
   try:
     if _debug or v:
-      subprocess.check_call(cmd, shell=True)
+      subprocess.run(cmd, shell=True)
     else:
-      subprocess.check_call(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+      subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
   except subprocess.CalledProcessError as e:
     print("Residue fixer failed", file=sys.stderr)
     return {}
@@ -170,8 +170,6 @@ def run_resfixer():
         f.write(ret_str["result_pdb"])
     else:
       print(ret_str["result_pdb"])
-
-
 
 
 if __name__ == "__main__":
