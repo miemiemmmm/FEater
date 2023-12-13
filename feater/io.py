@@ -1,13 +1,82 @@
-import os, sys, tempfile, subprocess, shutil
+import os, sys, tempfile, subprocess, shutil, hashlib
+
 import numpy as np
 import pytraj as pt
+import h5py as h5
 
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdMolTransforms, rdFMCS
+
 import feater, siesta
-import hashlib
+
+
+class hdffile(h5.File):
+  """
+  This class is a wrapper of h5py.File which enables the "with" statement
+  Wrapped up functions to read/write point data to HDF file
+  """
+  def __init__(self, filename, reading_flag):
+    # print(f"Opening HDF5 file '{filename}' in mode '{reading_flag}'")
+    super().__init__(filename, reading_flag)
+
+  # __enter__ and __exit__ are used to enable the "with" statement
+  def __enter__(self):
+    return self
+
+  def __exit__(self, exc_type, exc_value, traceback):
+    self.close()
+
+  def data(self, key):
+    dset = self[key]
+    return np.asarray(dset)
+
+  def dtype(self,key):
+    dset = self[key]
+    return dset.dtype
+
+  def draw_structure(self, depth=0):
+    """
+    Draw the structure of the HDF file. By default, only display the first level of the file (depth=0).
+    Args:
+      depth (int): The depth of the file structure to display.
+    """
+    print("############## HDF File Structure ##############")
+    def print_structure(name, obj):
+      current_depth = name.count('/')
+      if current_depth > depth:  # If the current item's depth exceeds the limit, return early
+        return
+      if isinstance(obj, h5.Group):
+        print(f"$ /{name:20s}/Heterogeneous Group")
+      else:
+        print(f"$ /{name:20s}: Shape-{obj.shape}")
+
+    self.visititems(print_structure)
+    print("############ END HDF File Structure ############")
+
+  def append_entries(self, dataset_name:str, data:np.ndarray):
+    """
+    Append entries to an existing dataset.
+    Args:
+      dataset_name (str): The name of the dataset to append to.
+      data (np.ndarray): The data to append to the dataset.
+    NOTE:
+      When creating the dataset, make sure to set maxshape to [None, 3]
+    """
+    dset = self[dataset_name]
+    current_shape = dset.shape
+    # Calculate the new shape after appending the new data
+    new_shape = (current_shape[0] + data.shape[0], *current_shape[1:])
+    # Resize the dataset to accommodate the new data
+    dset.resize(new_shape)
+    # Append the new data to the dataset
+    dset[current_shape[0]:new_shape[0]] = data
+
 
 class StructureProcessor:
+  """
+  This class is used to process the sub-structure of a protein
+  It registers the rules on how to process the sub-structures and with do_prod() to start the processing
+  """
   def __init__(self):
     self.sequence = []
     self.topology = pt.Topology()
@@ -72,8 +141,6 @@ class StructureProcessor:
     self._write_surf = self.output_settings["write_surf"]
 
   def process_residue_3letter(self, residue):
-    if __file__ == "/MieT5/tests/FEater/feater/io.py": # TODO: remove this line when doing production
-      print("Running in the editable mode")
     os.makedirs(os.path.abspath(os.path.abspath(os.path.join(self._output_folder, residue))), exist_ok=True)
     for f_idx in np.arange(self.nr_frames):
       for r_idx in np.arange(self.nr_residues):
@@ -123,7 +190,8 @@ class StructureProcessor:
             print(f"Residue {current_residue.name} has {heavy_atom_number} heavy atoms")
             continue
           else:
-            print("-s", end="")
+            # print("-s", end="")
+            pass
 
           tmp_prefix = os.path.join(tempdir, "tmpfile")
           output_prefix = os.path.join(self._output_folder, current_residue.name,

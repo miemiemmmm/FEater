@@ -1,67 +1,13 @@
+###################################################################################################
+################# This script converts a list of coordinate files to a HDF5 file ##################
+###################################################################################################
+
 import os, argparse, sys, time
 
-import h5py as h5
 import numpy as np
 import pytraj as pt
-from feater import RES2LAB
 
-
-class hdffile(h5.File):
-  def __init__(self, filename, reading_flag):
-    # print(f"Opening HDF5 file '{filename}' in mode '{reading_flag}'")
-    super().__init__(filename, reading_flag)
-
-  # __enter__ and __exit__ are used to enable the "with" statement
-  def __enter__(self):
-    return self
-
-  def __exit__(self, exc_type, exc_value, traceback):
-    self.close()
-
-  def data(self, key):
-    dset = self[key]
-    return np.asarray(dset)
-
-  def dtype(self,key):
-    dset = self[key]
-    return dset.dtype
-
-  def draw_structure(self, depth=0):
-    """
-    Draw the structure of the HDF file. By default, only display the first level of the file (depth=0).
-    Args:
-      depth (int): The depth of the file structure to display.
-    """
-    print("############## HDF File Structure ##############")
-    def print_structure(name, obj):
-      current_depth = name.count('/')
-      if current_depth > depth:  # If the current item's depth exceeds the limit, return early
-        return
-      if isinstance(obj, h5.Group):
-        print(f"$ /{name:20s}/Heterogeneous Group")
-      else:
-        print(f"$ /{name:20s}: Shape-{obj.shape}")
-
-    self.visititems(print_structure)
-    print("############ END HDF File Structure ############")
-
-  def append_entries(self, dataset_name:str, data:np.ndarray):
-    """
-    Append entries to an existing dataset.
-    Args:
-      dataset_name (str): The name of the dataset to append to.
-      data (np.ndarray): The data to append to the dataset.
-    NOTE:
-      When creating the dataset, make sure to set maxshape to [None, 3]
-    """
-    dset = self[dataset_name]
-    current_shape = dset.shape
-    # Calculate the new shape after appending the new data
-    new_shape = (current_shape[0] + data.shape[0], *current_shape[1:])
-    # Resize the dataset to accommodate the new data
-    dset.resize(new_shape)
-    # Append the new data to the dataset
-    dset[current_shape[0]:new_shape[0]] = data
+from feater import RES2LAB, io
 
 
 def checkfiles(file_list:str) -> list:
@@ -73,12 +19,6 @@ def checkfiles(file_list:str) -> list:
   return files
 
 
-def read_coord(file:str) -> np.ndarray:
-  traj = pt.load(file)
-  coord = traj.xyz[-1]
-  return coord
-
-
 def add_data_to_hdf(hdffile, dataset_name:str, data:np.ndarray, **kwargs):
   if dataset_name not in hdffile.keys():
     hdffile.create_dataset(dataset_name, data=data, **kwargs)
@@ -86,19 +26,31 @@ def add_data_to_hdf(hdffile, dataset_name:str, data:np.ndarray, **kwargs):
     hdffile.append_entries(dataset_name, data)
 
 
+def read_coord(file:str) -> np.ndarray:
+  traj = pt.load(file)
+  coord = traj.xyz[-1]
+  return coord
+
+
 def make_hdf(hdf_name:str, coord_files:list, **kwargs):
   st = time.perf_counter()
   coord_buffer = np.array([])
   label_buffer = np.array([])
   nr_atoms_buffer = np.array([])
-  with hdffile(hdf_name, 'w') as f:
+  start_idxs_buffer = np.array([])
+  end_idxs_buffer = np.array([])
+  with io.hdffile(hdf_name, 'w') as f:
     c = 0
+    global_start_idx = 0
     for file in coord_files:
       file = os.path.abspath(file)
       coordi = read_coord(file)
       coord_f32 = np.array(coordi, dtype=np.float32)
       nr_atoms = coord_f32.shape[0]
       restype = os.path.basename(file)[:3]
+      next_start_idx = global_start_idx
+      next_end_idx = next_start_idx + nr_atoms
+      global_start_idx += nr_atoms
       if restype not in RES2LAB.keys():
         raise ValueError(f"Unknown residue type: {restype}")
       labeli = RES2LAB[restype]
@@ -107,11 +59,15 @@ def make_hdf(hdf_name:str, coord_files:list, **kwargs):
         coord_buffer = np.concatenate((coord_buffer, coord_f32), axis=0)
         label_buffer = np.concatenate((label_buffer, np.array([labeli], dtype=np.int32)), axis=0)
         nr_atoms_buffer = np.concatenate((nr_atoms_buffer, np.array([nr_atoms], dtype=np.int32)), axis=0)
+        start_idxs_buffer = np.concatenate((start_idxs_buffer, np.array([next_start_idx], dtype=np.int32)), axis=0)
+        end_idxs_buffer = np.concatenate((end_idxs_buffer, np.array([next_end_idx], dtype=np.int32)), axis=0)
       else:
         coord_buffer = np.array(coord_f32, dtype=np.float32)
         label_buffer = np.array([labeli], dtype=np.int32)
         nr_atoms_buffer = np.array([nr_atoms], dtype=np.int32)
-      # print(len(label_buffer))
+        start_idxs_buffer = np.array([next_start_idx], dtype=np.int32)
+        end_idxs_buffer = np.array([next_end_idx], dtype=np.int32)
+
       c += 1
 
       if ((c) % 1000 == 0) or (c == len(coord_files)):
@@ -125,6 +81,8 @@ def make_hdf(hdf_name:str, coord_files:list, **kwargs):
         add_data_to_hdf(f, "coordinates", coord_buffer, dtype=np.float32, maxshape=[None, 3], **kwargs)
         add_data_to_hdf(f, "nr_atoms", nr_atoms_buffer, dtype=np.int32, maxshape=[None], **kwargs)
         add_data_to_hdf(f, "label", label_buffer, dtype=np.int32, maxshape=[None], **kwargs)
+        add_data_to_hdf(f, "start_indices", start_idxs_buffer, dtype=np.int32, maxshape=[None], **kwargs)
+        add_data_to_hdf(f, "end_indices", end_idxs_buffer, dtype=np.int32, maxshape=[None], **kwargs)
 
         if  "entry_number" not in f.keys():
           f.create_dataset('entry_number', data= np.array([len(label_buffer)], dtype=np.int32), dtype = np.int32, maxshape = [1], **kwargs)

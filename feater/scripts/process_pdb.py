@@ -58,7 +58,6 @@ def write_performance_report(filename, enable=True):
 
 
 def do_prod(complex_files: list, focused_res:list, output_settings: dict, worker_num = 32, thread_per_worker = 1, write_report = False):
-
   # Initialize the dask cluster
   split_groups = np.array_split(complex_files, worker_num)
   cluster = LocalCluster(n_workers=worker_num, threads_per_worker=thread_per_worker,
@@ -112,8 +111,8 @@ def parser_run_pdbprocess():
   parser.add_argument("-prod", "--production_mode", default=0, type=int, help="Run the production mode; Only explicitly set to 1 to run the production mode, otherwise run the test mode; Default: 0.")
 
   # Dask worker settings
-  parser.add_argument("-wn", "--worker_number", default=8, type=str, help="Number of workers; Default: 8. ")
-  parser.add_argument("-tn", "--thread_per_worker", default=2, type=str, help="Number of threads per worker; Default: 2. ")
+  parser.add_argument("-wn", "--worker_number", default=8, type=int, help="Number of workers; Default: 8. ")
+  parser.add_argument("-tn", "--thread_per_worker", default=2, type=int, help="Number of threads per worker; Default: 2. ")
 
   # Debug mode only use single thread
   parser.add_argument("--debug", default=0, type=int, help="Debug mode")
@@ -220,32 +219,4 @@ if __name__ == "__main__":
     choosen_files = np.random.choice(complex_files, 30, replace=False)
     choosed_res = np.random.choice(RESIDUES_THREE_LETTER, 10, replace=False)
     do_prod(choosen_files, choosed_res, output_settings,worker_num=16, thread_per_worker=1)
-
-  # worker_num = 32
-  # thread_per_worker = 1
-  # found_PDB = complex_files[:100]
-  # split_groups = np.array_split(found_PDB, worker_num)
-  # cluster = LocalCluster(
-  #   n_workers=worker_num,
-  #   threads_per_worker=thread_per_worker,
-  #   processes=True,
-  #   memory_limit='6GB',
-  # )
-  #
-  # with Client(cluster) as client:
-  #   with performance_report(filename="dask-report.html"):
-  #     tasks = []
-  #     c = 0
-  #     for trajlist in split_groups:
-  #       for residue in RESIDUES_THREE_LETTER:
-  #         c += 1
-  #         print(f"Task {c} | focused residue: {residue} | trajectories: {trajlist}")
-  #         tasks.append(dask.delayed(parallelize_traj)(trajlist, residue))
-  #
-  #     print(f"# Task set contains {len(tasks)} jobs; Jobs are generated and ready to run")
-  #     st = time.perf_counter()
-  #     futures = client.compute(tasks)
-  #     results = client.gather(futures)
-  #     [i.release() for i in futures]
-  #     print(f"# Task finished, time elapsed: {(time.perf_counter() - st) / 60:.2f} min")
 

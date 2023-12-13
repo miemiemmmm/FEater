@@ -7,7 +7,6 @@ name = "feater"  # as it would appear on PyPI
 version = "0.0.1"
 description = "A Python package for feater "
 authors = [
-    {name = "Yang Zhang", email = "credo_zhang@163.com"},
     {name = "Yang Zhang", email = "y.zhang@bioc.uzh.ch"},
 ]
 dependencies = [
@@ -23,3 +22,6 @@ include-package-data = true
 [project.entry-points.console_scripts]
 fixres = "feater.scripts.fix_residue:run_resfixer"
 pdbprocess = "feater.scripts.process_pdb:run_pdbprocess"
+pdb2hdf = "feater.scripts.make_HDF:console_interface"
+pdb2nc = "feater.scripts.make_NetCDF:console_interface"
+

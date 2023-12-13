@@ -1,6 +1,8 @@
-recursive-include feater *.py *.so
+recursive-include feater *.py
+recursive-include src *.cpp *.h *.cu Makefile
 
 include README.md
 include LICENSE
 include pyproject.toml
 include setup.py
+include Makefile
