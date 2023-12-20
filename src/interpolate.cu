@@ -31,10 +31,11 @@ __global__ void coordi_interp_kernel(const float *coord, float *interpolated, co
 
 	if (task_index < grid_size){
 		// Compute the grid coordinate from the grid index
+    // TODO: Check why the grid coordinate is like this???
 		float grid_coord[3] = {
-			static_cast<float>(task_index % dims[0]),
-			static_cast<float>(task_index / dims[0] % dims[1]),
-			static_cast<float>(task_index / dims[0] / dims[1]),
+      static_cast<float>(task_index / dims[0] / dims[1]),
+      static_cast<float>(task_index / dims[0] % dims[1]),
+      static_cast<float>(task_index % dims[0]),
 		};
 		float dist_square = 0.0f;
 		for (int i = 0; i < 3; ++i) {
@@ -147,11 +148,11 @@ void interpolate_host(float *interpolated, const float *coord, const float *weig
 		float norm_chk_host = 0;
 		cudaMemcpy(&tmp_sum_host, tmp_sum, sizeof(float), cudaMemcpyDeviceToHost);
 		cudaMemcpy(&norm_chk_host, norm_chk, sizeof(float), cudaMemcpyDeviceToHost);
-		if (tmp_sum_host - 0 < 1e-6) {
+		if (tmp_sum_host - 0 < 0.01) {
 			/* The sum of the temporary array is used for normalization, skip if the sum is 0 */
 			std::cerr << "Warning: The sum of the temporary array is 0" << std::endl;
 			continue;
-		} else if (std::abs(norm_chk_host - weight[atm_idx]) > 1e-6) {
+		} else if (std::abs(norm_chk_host - weight[atm_idx]) > 0.01) {
 			std::cerr << "Warning: The sum of the normalized temporary array is not equal to the weight: " << norm_chk_host << "/" << weight[atm_idx] << std::endl;
 		}
 
@@ -166,7 +167,7 @@ void interpolate_host(float *interpolated, const float *coord, const float *weig
 	cudaDeviceSynchronize();
 	cudaMemcpy(&tmp_sum_host, tmp_sum, sizeof(float), cudaMemcpyDeviceToHost);
 	float tmp_weights_sum = sum_host(weight, atom_nr);
-	if (std::abs(tmp_sum_host - tmp_weights_sum) > 1e-6) {
+	if (std::abs(tmp_sum_host - tmp_weights_sum) > 0.01) {
 		std::cerr << "Warning: The sum of the interpolated array is not equal to the sum of the weights: " << tmp_sum_host << "/" << tmp_weights_sum << std::endl;
 	}
 
@@ -180,64 +181,4 @@ void interpolate_host(float *interpolated, const float *coord, const float *weig
 	cudaFree(norm_chk);
 }
 
-
-// __global__ void g_interpolate(const double *data1, const double *data2, const double *weights,
-// double *interpolated, int n1, int n2, int d, double cutoff, double sigma){
-// 	double cutoff_sq = cutoff * cutoff;
-//   int i = blockIdx.x * blockDim.x + threadIdx.x;
-//
-//   if (i >= n1) {
-//   	return;
-//   }
-//   for (int j = 0; j < n2; ++j) {
-//     double dist_sq = 0.0;
-//     bool skip = false;
-//
-//     for (int k = 0; k < d; k++) {
-//       double diff = data1[i * d + k] - data2[j * d + k];
-//       if (std::abs(diff) > cutoff_sq) {
-//       	skip = true;
-//       	break;
-// 			}
-//       dist_sq += diff * diff;
-//       if (dist_sq > cutoff_sq) {
-//       	skip = true;
-//       	break;
-// 			}
-//     }
-//     if (!skip) {
-//       double dist = sqrt(dist_sq);
-//       double increment = gaussian_device(dist, 0.0, sigma) * weights[i];
-//       atomicAdd(&interpolated[j], increment);
-//     }
-//   }
-// }
-
-// __global__ void compute_temporary_array(const float *coord, const int coord_nr,
-// 	float &interpolated, const int *dims, const double cutoff, const double sigma) {
-// 	/*
-// 	Compute the atom coordinate idx_x and grid coordinate idx_y and fill the interpolated array
-// 	*/
-// 	int idx_x = blockIdx.x * blockDim.x + threadIdx.x;
-// 	int idx_y = blockIdx.y * blockDim.y + threadIdx.y;
-//
-// 	if (idx_x < coord_nr && idx_y < coord_nr) {
-// 		float dist_square = 0.0f;
-// 		// # TODO: Check the coordinate order
-// 		float grid_coord = {
-// 			static_cast<float>(idx_x % dims[0]) * spacings[0],
-// 			static_cast<float>(idx_x / dims[0] % dims[1]) * spacings[1],
-// 			static_cast<float>(idx_x / dims[0] / dims[1]) * spacings[2],
-// 		};
-// 		for (int i = 0; i < 3; ++i) {
-// 			float diff = coord[idx_x * 3 + i] - grid_coord[i];
-// 			dist_square += diff * diff;
-// 		}
-//
-// 		if (dist_square < cutoff * cutoff) {
-// 			float increment = gaussian_device(dist, 0.0, sigma);
-// 			atomicAdd(&interpolated[idx_y], increment);
-// 		}
-// 	}
-// }
 

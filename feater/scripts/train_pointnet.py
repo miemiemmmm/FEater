@@ -3,6 +3,7 @@ import os, time, random, argparse
 from tqdm import tqdm
 import numpy as np
 import h5py as h5
+import matplotlib.pyplot as plt
 
 import torch
 import torch.nn.parallel
@@ -14,8 +15,75 @@ from pointnet.model import PointNetCls, feature_transform_regularizer
 
 from feater import io, constants
 
+def confusion_matrix(predictions, labels, output_file="confusion_matrix.png"):
+  """
+  Compute the confusion matrix for the predicted labels and the ground truth labels
+  Args:
+    pred: The predicted labels
+    label: The ground truth labels
+  Returns:
+    Save to figure file
+  """
+  nr_classes = 20
+  conf_mat = np.zeros((nr_classes, nr_classes), dtype=np.int32)
+  for pred, label in zip(predictions, labels):
+    conf_mat[pred, label] += 1
 
-class FEaterDataset(data.Dataset):
+  # Compute the accuracies
+  percent_acc = np.sum(np.array(predictions) == np.array(labels)) / len(predictions)
+  accuracies = np.zeros(nr_classes, dtype=np.float32)
+  for i in range(nr_classes):
+    accuracies[i] = conf_mat[i, i] / np.sum(conf_mat[:, i])
+  mean_acc = np.mean(accuracies)
+
+  conf_mat = conf_mat / np.sum(conf_mat, axis=0, keepdims=True)
+  conf_mat = conf_mat * 100
+
+  # Plot the confusion matrix
+  fig, ax  = plt.subplots(figsize=(16, 16))
+  im = ax.imshow(conf_mat, cmap="inferno", vmin=0, vmax=100)
+  ax.set_title(f"Confusion Matrix of the PointNet Classifier\nOvervall Accuracy: {percent_acc:.3f}, Mean Accuracy: {mean_acc:.3f}", fontsize=20)
+  ax.set_xlabel("Ground Truth", fontsize=20)
+  ax.set_ylabel("Prediction", fontsize=20)
+  tick_labels = [f"{constants.LAB2RES[i]} ({i})" for i in range(nr_classes)]
+  ax.set_xticks(np.arange(nr_classes))
+  ax.set_yticks(np.arange(nr_classes))
+  ax.set_xticklabels(tick_labels, rotation=-45, fontsize=20)
+  ax.set_yticklabels(tick_labels, fontsize=20)
+
+  # Mark text on the confusion matrix
+  for i in range(nr_classes):
+    for j in range(nr_classes):
+      if conf_mat[i, j] > 10:
+        ax.text(j,i, f"{int(conf_mat[i, j])}", ha="center", va="center", color="white" if conf_mat[i, j] < 50 else "black", fontsize=15, fontweight="bold")
+  cbar = fig.colorbar(im, ax=ax, shrink=0.8, aspect=30)
+  cbar.ax.tick_params(labelsize=20)
+  plt.savefig(output_file, dpi=300, bbox_inches="tight")
+  plt.close()
+
+
+def evaluation(classifier, dataloader):
+  """
+  Evaluate the classifier on the validation set
+  Args:
+    classifier: The classifier
+    dataloader: The dataloader for the validation set
+  """
+  classifier = classifier.eval()
+  pred = []
+  label = []
+  for i, data in enumerate(dataloader):
+    valid_data, valid_label = data
+    valid_data = valid_data.transpose(2, 1)
+    valid_data, valid_label = valid_data.cuda(), valid_label.cuda()
+    pred_choice, _, _ = classifier(valid_data)
+    pred_choice = pred_choice.data.max(1)[1]
+    pred += pred_choice.cpu().tolist()
+    label += valid_label.cpu().tolist()
+  return pred, label
+
+
+class CoordDataset(data.Dataset):
   """
   Supports constant time random access to the dataset
   """
@@ -182,85 +250,90 @@ if __name__ == "__main__":
 
   random.seed(args.manualSeed)
   torch.manual_seed(args.manualSeed)
-  batchsize = 5000
 
-  # Load the dataset
-  datafiles = [
-    "/media/yzhang/MieT72/Data/feater_test4/ResALA.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResARG.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResASN.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResASP.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResCYS.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResGLN.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResGLU.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResGLY.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResHIS.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResILE.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResLEU.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResLYS.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResMET.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResPHE.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResPRO.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResSER.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResTHR.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResTRP.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResTYR.h5",
-    "/media/yzhang/MieT72/Data/feater_test4/ResVAL.h5",
-  ]
+  BATCH_SIZE = 5000
+  EPOCH_NR = 50
+  verbose = False
+  # LOAD_MODEL = "pointnet_coord_model.pth"
+  OUTPUT_DIR = "/media/yzhang/MieT72/scripts_data/coord_results"
+  LOAD_MODEL = None
 
+  # Load the dataset TODO: Hardcoded training set
   st = time.perf_counter()
-  feater_data = FEaterDataset(datafiles)
+  # datafiles = "/media/yzhang/MieT72/Data/feater_database_coord/TestSet_ALA.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_ARG.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_ASN.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_ASP.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_CYS.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_GLN.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_GLU.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_GLY.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_HIS.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_ILE.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_LEU.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_LYS.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_MET.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_PHE.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_PRO.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_SER.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_THR.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_TRP.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_TYR.h5%/media/yzhang/MieT72/Data/feater_database_coord/TestSet_VAL.h5"
+  datafiles = "/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_ALA.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_ARG.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_ASN.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_ASP.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_CYS.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_GLN.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_GLU.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_GLY.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_HIS.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_ILE.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_LEU.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_LYS.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_MET.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_PHE.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_PRO.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_SER.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_THR.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_TRP.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_TYR.h5%/media/yzhang/MieT72/Data/feater_database_coord/TrainingSet_VAL.h5"
+  datafiles = datafiles.strip("%").split("%")
+  training_data = CoordDataset(datafiles)
+  dataloader_train = data.DataLoader(training_data, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+
+  validfiles = "/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_ALA.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_ARG.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_ASN.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_ASP.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_CYS.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_GLN.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_GLU.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_GLY.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_HIS.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_ILE.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_LEU.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_LYS.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_MET.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_PHE.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_PRO.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_SER.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_THR.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_TRP.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_TYR.h5%/media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_VAL.h5%"
+  validfiles = validfiles.strip("%").split("%")
+  valid_data = CoordDataset(validfiles)
+  dataloader_valid = data.DataLoader(valid_data, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
 
   print(f"Handled the {len(datafiles):3d} h5files: Time elapsed: {(time.perf_counter() - st)*1e3:8.2f} ms")
-  print(f"The dataset has {len(feater_data)} entries")
-
-
-  verbose = False
-
-  if verbose:
-    check_num = 15
-    choices = np.random.choice(len(feater_data), check_num, replace=False)
-    for i in choices:
-      st = time.perf_counter()
-      t, l = feater_data[i]
-      print(f"Retrieval of {i} took: {(time.perf_counter() - st)*1e3:6.2f} ms; Number of points: {t.shape[0]}; Residue: {constants.LAB2RES[int(l)]}")
-
-  # Load the dataset
-  dataloader = data.DataLoader(feater_data, batch_size=batchsize, shuffle=True, num_workers=4)
+  print(f"The dataset has {len(training_data)} entries")
 
   classifier = PointNetCls(k=20, feature_transform=False)
-  if len(args.load_model) > 0:
-    classifier.load_state_dict(torch.load(args.load_model))
+  if LOAD_MODEL and len(LOAD_MODEL) > 0:
+    classifier.load_state_dict(torch.load(LOAD_MODEL))
   optimizer = optim.Adam(classifier.parameters(), lr=0.001, betas=(0.9, 0.999))
   scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.5)
   classifier.cuda()
 
+  print(f"Number of parameters: {sum([p.numel() for p in classifier.parameters()])}")
+
   # Check if the dataloader could successfully load the data
-  for i, data in enumerate(dataloader):
-    train_data, train_label = data
-    train_data = train_data.transpose(2, 1)  # Move the coordinate 3 dim to channels of dimensions
-    train_data, train_label = train_data.cuda(), train_label.cuda()
+  for epoch in range(EPOCH_NR):
+    print("#" * 80)
+    print(f"Running the epoch {epoch}/{EPOCH_NR}")
+    st = time.perf_counter()
+    for i, data in enumerate(dataloader_train):
+      train_data, train_label = data
+      train_data = train_data.transpose(2, 1)  # Move the coordinate 3 dim to channels of dimensions
+      train_data, train_label = train_data.cuda(), train_label.cuda()
 
-    if verbose:
-      print(train_data.shape, train_label.shape)
-      print(f"Retrieval of {i}/{len(dataloader)} took: {(time.perf_counter() - st) * 1e3:6.2f} ms; Batch size: {train_data.shape[0]}; Number of points: {train_data.shape};")
-      st = time.perf_counter()
+      if verbose:
+        print(train_data.shape, train_label.shape)
+        print(f"Retrieval of {i}/{len(dataloader_train)} took: {(time.perf_counter() - st) * 1e3:6.2f} ms; Batch size: {train_data.shape[0]}; Number of points: {train_data.shape};")
+        st = time.perf_counter()
 
-    optimizer.zero_grad()
-    classifier = classifier.train()
-    pred, trans, trans_feat = classifier(train_data)
-    loss = F.nll_loss(pred, train_label)
-    if False:
-      loss += feature_transform_regularizer(trans_feat) * 0.001
-    loss.backward()
-    optimizer.step()
-    pred_choice = pred.data.max(1)[1]
-    correct = pred_choice.eq(train_label.data).cpu().sum()
-    print(f"Processing the block {i}/{len(dataloader)}; Loss: {loss.item():.4f}; Accuracy: {correct.item()/float(train_label.size()[0]):.4f}")
+      optimizer.zero_grad()
+      classifier = classifier.train()
+      pred, trans, trans_feat = classifier(train_data)
+      loss = F.nll_loss(pred, train_label)
+      if False:
+        loss += feature_transform_regularizer(trans_feat) * 0.001
+      loss.backward()
+      optimizer.step()
+      pred_choice = pred.data.max(1)[1]
+      correct = pred_choice.eq(train_label.data).cpu().sum()
+      print(f"Processing the block {i}/{len(dataloader_train)}; Loss: {loss.item():.4f}; Accuracy: {correct.item()/float(train_label.size()[0]):.4f}")
 
-    if verbose:
-      print_label_dist(train_label)
+      if verbose:
+        print_label_dist(train_label)
 
-    # print(f"Batch {i}: shape train data: {train_data.shape}, shape train label: {train_label.shape}")
+      if (i+1) % 50 == 0:
+        valid_data, valid_label = next(dataloader_valid.__iter__())
+        valid_data = valid_data.transpose(2, 1)
+        valid_data, valid_label = valid_data.cuda(), valid_label.cuda()
+        classifier = classifier.eval()
+        pred, _, _ = classifier(valid_data)
+        loss = F.nll_loss(pred, valid_label)
+        pred_choice = pred.data.max(1)[1]
+        correct = pred_choice.eq(valid_label.data).cpu().sum()
+        print(f"Validation: Loss: {loss.item():.4f}; Accuracy: {correct.item()/float(valid_label.size()[0]):.4f}")
+
+    # Save the model
+    print(f"Epock {epoch} takes {time.perf_counter() - st:.2f} seconds, saving the model and confusion matrix")
+    modelfile_output = os.path.join(os.path.abspath(OUTPUT_DIR), f"pointnet_coord_{epoch}.pth")
+    torch.save(classifier.state_dict(), modelfile_output)
+    pred, label = evaluation(classifier, dataloader_valid)
+    conf_mtx_output = os.path.join(os.path.abspath(OUTPUT_DIR), f"pointnet_confmatrix_{epoch}.png")
+    confusion_matrix(pred, label, output_file=conf_mtx_output)
+
+
+  conf_mtx_output = os.path.join(os.path.abspath(OUTPUT_DIR), "pointnet_confmatrix_final.png")
+  confusion_matrix(pred, label, output_file=conf_mtx_output)
 
 

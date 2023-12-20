@@ -1,29 +1,26 @@
 ###################################################################################################
 ################# This script converts a list of coordinate files to a HDF5 file ##################
 ###################################################################################################
-
 import os, argparse, sys, time
 
 import numpy as np
 import pytraj as pt
 
-from feater import RES2LAB, io
+from feater import RES2LAB, io, utils
 
 
-def checkfiles(file_list:str) -> list:
-  with open(file_list, 'r') as f:
-    files = f.read().strip("\n").split('\n')
-    for file in files:
-      if not os.path.isfile(file):
-        raise ValueError(f"File {file} does not exist.")
-  return files
-
-
-def add_data_to_hdf(hdffile, dataset_name:str, data:np.ndarray, **kwargs):
-  if dataset_name not in hdffile.keys():
-    hdffile.create_dataset(dataset_name, data=data, **kwargs)
-  else:
-    hdffile.append_entries(dataset_name, data)
+# def checkfiles(file_list:str) -> list:
+#   with open(file_list, 'r') as f:
+#     files = f.read().strip("\n").split('\n')
+#     for file in files:
+#       if not os.path.isfile(file):
+#         raise ValueError(f"File {file} does not exist.")
+#   return files
+# def add_data_to_hdf(hdffile, dataset_name:str, data:np.ndarray, **kwargs):
+#   if dataset_name not in hdffile.keys():
+#     hdffile.create_dataset(dataset_name, data=data, **kwargs)
+#   else:
+#     hdffile.append_entries(dataset_name, data)
 
 
 def read_coord(file:str) -> np.ndarray:
@@ -78,11 +75,11 @@ def make_hdf(hdf_name:str, coord_files:list, **kwargs):
         label_buffer = np.array(label_buffer, dtype=np.int32)
         nr_atoms_buffer = np.array(nr_atoms_buffer, dtype=np.int32)
 
-        add_data_to_hdf(f, "coordinates", coord_buffer, dtype=np.float32, maxshape=[None, 3], **kwargs)
-        add_data_to_hdf(f, "nr_atoms", nr_atoms_buffer, dtype=np.int32, maxshape=[None], **kwargs)
-        add_data_to_hdf(f, "label", label_buffer, dtype=np.int32, maxshape=[None], **kwargs)
-        add_data_to_hdf(f, "start_indices", start_idxs_buffer, dtype=np.int32, maxshape=[None], **kwargs)
-        add_data_to_hdf(f, "end_indices", end_idxs_buffer, dtype=np.int32, maxshape=[None], **kwargs)
+        utils.add_data_to_hdf(f, "coordinates", coord_buffer, dtype=np.float32, maxshape=[None, 3], **kwargs)
+        utils.add_data_to_hdf(f, "nr_atoms", nr_atoms_buffer, dtype=np.int32, maxshape=[None], **kwargs)
+        utils.add_data_to_hdf(f, "label", label_buffer, dtype=np.int32, maxshape=[None], **kwargs)
+        utils.add_data_to_hdf(f, "start_indices", start_idxs_buffer, dtype=np.int32, maxshape=[None], **kwargs)
+        utils.add_data_to_hdf(f, "end_indices", end_idxs_buffer, dtype=np.int32, maxshape=[None], **kwargs)
 
         if  "entry_number" not in f.keys():
           f.create_dataset('entry_number', data= np.array([len(label_buffer)], dtype=np.int32), dtype = np.int32, maxshape = [1], **kwargs)
@@ -138,7 +135,7 @@ def parse_args():
 
 def console_interface():
   args = parse_args()
-  files = checkfiles(args.input)
+  files = utils.checkfiles(args.input)
   print(f"Found {len(files)} files in the list")
   make_hdf(args.output, files)
 

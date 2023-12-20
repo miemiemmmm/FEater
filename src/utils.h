@@ -3,8 +3,6 @@
 #include <fstream>
 
 
-
-
 inline void write_xyzr(std::string filename, const float* xyz_array, const float* r_array, int num_particles){
 	std::ofstream file;
 	file.open(filename);

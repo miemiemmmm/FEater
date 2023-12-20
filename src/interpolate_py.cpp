@@ -37,7 +37,7 @@ void translate_coord(float* coord, const int atom_nr, const int *dims, const dou
 	cog_coord[0] /= atom_nr;
 	cog_coord[1] /= atom_nr;
 	cog_coord[2] /= atom_nr;
-	std::cout << "center of geom is: " << cog_coord[0] << " " << cog_coord[1] << " " << cog_coord[2] << "\n";
+//	std::cout << "center of geom is: " << cog_coord[0] << " " << cog_coord[1] << " " << cog_coord[2] << "\n";
 
 	for (int i = 0; i < atom_nr; i++) {
 		coord[i*3]   = (coord[i*3] - cog_coord[0])/spacing + dims[0]/2;
@@ -65,11 +65,15 @@ py::array_t<float> run_interpolate(py::array arr_target, py::array arr_weights, 
 	float *weight_ptr = new float[atom_nr];
 	dtype_to_float(arr_target, coord_ptr, atom_nr*3);
 	dtype_to_float(arr_weights, weight_ptr, atom_nr);
+
+	// TODO: change the cutoff to fit with the spacing
 	translate_coord(coord_ptr, atom_nr, dims_ptr, spacing);
+	double new_cutoff = cutoff/spacing;
+	double new_sigma = sigma/spacing;
 
 	// Perform the point interpolation and copy to the result array
 	float *interpolated = new float[grid_coord_nr];
-	interpolate_host(interpolated, coord_ptr, weight_ptr, atom_nr, dims_ptr, cutoff, sigma);
+	interpolate_host(interpolated, coord_ptr, weight_ptr, atom_nr, dims_ptr, new_cutoff, new_sigma);
 	py::array_t<float> result({grid_coord_nr});
 	std::memcpy(result.mutable_data(), interpolated, grid_coord_nr * sizeof(float));
 	delete[] coord_ptr;
@@ -89,7 +93,7 @@ float sum_array(py::array arr) {
 }
 
 
-PYBIND11_MODULE(interpolate, m) {
+PYBIND11_MODULE(voxelize, m) {
   m.def("sum_array", &sum_array,
   	py::arg("arr"),
   	"A test function to calculate the sum of array"
