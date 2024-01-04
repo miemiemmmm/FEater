@@ -7,11 +7,53 @@ from matplotlib import colormaps
 from feater import io
 from siesta.scripts import view_obj
 
+
+element_color_map = {
+  # BASIC ELEMENTS
+  12: [0.5, 0.5, 0.5],
+  1:  [1, 1, 1],
+  14: [0, 0, 1],
+  15: [1, 0, 0],     # TODO: Need to correct the data in the hdf file. Round to closest interger not the floor
+  16: [1, 0, 0],
+  32: [1, 1, 0],
+  31: [1, 0.6, 0.4],
+
+  # METALS
+  23: [0.7, 0.7, 0.1],
+  24: [0.7, 0.7, 0.1],
+  40: [0.7, 0.7, 0.1],
+  39 : [0, 0.5, 1],
+  65: [0.8, 0.4, 0.1],
+  63: [0.8, 0.4, 0.1],
+  56: [0.8, 0.4, 0.1],
+  55: [0.6, 0, 0.4],
+
+  # UNKNOWNS
+  "UNK": [0.5, 0.5, 0.5],
+  "U": [0.5, 0.5, 0.5],
+}
+
+
 def get_coordi(hdf, index:int) -> np.ndarray:
   st = hdf["start"][index]
   ed = hdf["end"][index]
   coord = hdf["coord"][st:ed]
   return np.asarray(coord, dtype=np.float64)
+
+def get_elemi(hdf, index:int) -> np.ndarray:
+  st = hdf["start"][index]
+  ed = hdf["end"][index]
+  elemi = hdf["elems"][st:ed]
+  retcolor = np.zeros((elemi.shape[0], 3), dtype=np.float32)
+  for idx in range(len(elemi)):
+    mass = elemi[idx]
+    print("mass is : ", mass)
+    if mass not in element_color_map:
+      print(f"Warning: Element {mass} is not in the element color map")
+      retcolor[idx] = element_color_map["UNK"]
+    else:
+      retcolor[idx] = element_color_map[mass]
+  return retcolor
 
 def get_voxeli(hdf, index:int) -> np.ndarray:
   dims = np.asarray(hdf["shape"])
@@ -91,6 +133,7 @@ def main_render(inputfile:str, index:int, args):
     voxeli = get_voxeli(hdf, index)
     dims = np.asarray(hdf["shape"])
     diff = coord_cog - np.asarray([16, 16, 16])
+    colors = get_elemi(hdf, index)
 
   # Main rendering functions
   vis = o3d.visualization.Visualizer()
@@ -101,7 +144,10 @@ def main_render(inputfile:str, index:int, args):
     vis.add_geometry(geo)
 
   geoms_coord = get_geo_coordi(coordi - diff)
-  for geo in geoms_coord:
+
+  for geo, color in zip(geoms_coord, colors):
+    geo.paint_uniform_color(color)
+    geo.compute_vertex_normals()
     vis.add_geometry(geo)
 
   geoms_box = view_obj.create_bounding_box(dims)
@@ -142,13 +188,4 @@ def console_interface():
 
 if __name__ == "__main__":
   console_interface()
-
-
-
-
-
-
-
-
-
 

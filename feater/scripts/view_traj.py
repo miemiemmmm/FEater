@@ -4,6 +4,7 @@ import open3d as o3d
 import pytraj as pt
 from hashlib import md5
 
+from feater import io, dataloader
 from siesta.scripts import view_obj
 
 
@@ -95,28 +96,24 @@ def update_sphere_center(sphere, new_center):
   sphere.transform(transformation)
 
 
-def viewtraj_parser():
-  parser = argparse.ArgumentParser(description="View the trajectory of a particle")
-  parser.add_argument("-t", "--topology", type=str, help="The topology file")
-  parser.add_argument("-fps", "--target_fps", type=int, default=27, help="The target FPS")
-  parser.add_argument("-f", "--make_film", type=int, default=0, help="Make a film")
-  parser.add_argument("-ac", "--automatic_center", type=int, default=0, help="Automatically center the particle")
-  parser.add_argument("-a", "--alignment", default=0, type=int, help="Align the particle")
-  parser.add_argument("-am", "--alignment_mask", type=str, default="", help="The alignment mask")
-  parser.add_argument("-s", "--stride", type=int, default=50, help="The stride of the trajectory")
+def read_h5_trajs(h5files, topfile, stride): 
+  top = pt.load(topfile).top
+  dataset = dataloader.CoordDataset(h5files, padding=False)
+  frames = np.arange(0, len(dataset), stride)
+  xyzs = np.zeros((len(frames), top.n_atoms, 3))
+  
+  for i, frame in enumerate(frames):
+    data, _ = dataset[frame]
+    data = data.numpy()
+    xyzs[i] = data
+  
+  traj = pt.Trajectory(top=top, xyz=xyzs)
+  return traj
 
-  known_args, unknown_args = parser.parse_known_args()
+def read_nc_traj(trajfiles, topfile, stride):
+  thetraj = pt.iterload(trajfiles, top=topfile, stride=known_args.stride)
+  return thetraj
 
-  if (known_args.topology is None) or (not os.path.exists(known_args.topology)):
-    print("Fatal: Please specify the topology file", file=sys.stderr)
-    parser.print_help()
-    # exit(1)
-  if (len(unknown_args) == 0):
-    print("Fatal: Please specify the trajectory file", file=sys.stderr)
-    parser.print_help()
-    # exit(1)
-
-  return known_args, unknown_args
 
 @contextlib.contextmanager
 def tempdir(make_movie=False):
@@ -152,10 +149,16 @@ def viewtraj_runner():
 
   print("The following trajectory files will be loaded: ")
   print("\n".join(trajfiles))
-  thetraj = pt.iterload(trajfiles, top=topfile, stride=known_args.stride)
+  if "h5" in trajfiles[0]:
+    thetraj = read_h5_trajs(trajfiles, topfile, known_args.stride)
+  elif "nc" in trajfiles[0] or "pdb" in trajfiles[0]:
+    thetraj = pt.iterload(trajfiles, top=topfile, stride=known_args.stride)
+  else: 
+    print(f"Fatal: Unsupport trajectory file format", file=sys.stderr)
+    exit(1)
   frames = thetraj.n_frames
 
-  if known_args.alignment or len(known_args.alignment_mask) > 0:
+  if known_args.alignment:
     selected_atoms = thetraj.top.select(known_args.alignment_mask)
     if len(selected_atoms) == 0:
       print(f"Fatal: The alignment mask '{known_args.alignment_mask}' is not valid", file=sys.stderr)
@@ -170,15 +173,15 @@ def viewtraj_runner():
   vis.create_window(window_name="Trajectory viewer", width=1500, height=1000)
   for geom in GEOM_DICT.values():
     vis.add_geometry(geom)
+  
+  if known_args.render_json != "":
+    vis.get_render_option().load_from_json(known_args.render_json)
+  if known_args.camera_json != "":
+    vis.get_view_control().convert_from_pinhole_camera_parameters(o3d.io.read_pinhole_camera_parameters(known_args.camera_json))
+
   vis.poll_events()
   vis.update_renderer()
-
-  # render_option = vis.get_render_option()
-  # render_option.load_from_json("/MieT5/MyRepos/FEater/feater/scripts/RenderOption_WS_CN.json")
-  # view_control = vis.get_view_control()
-  # phparam = o3d.io.read_pinhole_camera_parameters("/MieT5/MyRepos/FEater/feater/scripts/ScreenCamera_2023-12-07-18-28-16.json")
-  # view_control.convert_from_pinhole_camera_parameters(phparam)
-  vis.run()   # Stall the program and allow the user to interact with the viewer
+  vis.run()              # Stall the program and allow the user to interact with the viewer
 
   with tempdir(make_movie=known_args.make_film):
     time_checker = time.perf_counter()
@@ -194,7 +197,6 @@ def viewtraj_runner():
         vis.capture_screen_image(os.path.join(TMPDIR, f"frame_{i:03d}.png"))
       if (time.perf_counter() - time_checker) < frametime:
         # If the frame is rendered too fast, wait for a while
-        print("Waiting")
         time.sleep(frametime - (time.perf_counter() - time_checker))
       time_checker = time.perf_counter()
 
@@ -211,9 +213,35 @@ def viewtraj_runner():
   vis.destroy_window()
 
 
+def viewtraj_parser():
+  parser = argparse.ArgumentParser(description="View the trajectory of a particle")
+  parser.add_argument("-t", "--topology", type=str, help="The topology file")
+  parser.add_argument("-fps", "--target_fps", type=int, default=27, help="The target FPS")
+  parser.add_argument("-f", "--make_film", type=int, default=0, help="Make a film")
+  parser.add_argument("-ac", "--automatic_center", type=int, default=0, help="Automatically center the particle")
+  parser.add_argument("-a", "--alignment", default=0, type=int, help="Align the particle")
+  parser.add_argument("-am", "--alignment_mask", type=str, default="@CA,C,N", help="The alignment mask")
+  parser.add_argument("-s", "--stride", type=int, default=50, help="The stride of the trajectory")
+  parser.add_argument("-r", "--render_json", type=str, default="", help="The camera settings")
+  parser.add_argument("-c", "--camera_json", type=str, default="", help="The camera settings")
+
+  known_args, unknown_args = parser.parse_known_args()
+
+  if (known_args.topology is None) or (not os.path.exists(known_args.topology)):
+    print("Fatal: Please specify the topology file", file=sys.stderr)
+    parser.print_help()
+    exit(1)
+  if len(unknown_args) == 0:
+    print("Fatal: Please specify the trajectory file", file=sys.stderr)
+    parser.print_help()
+    exit(1)
+  return known_args, unknown_args
+
+
 if __name__ == "__main__":
   viewtraj_runner()
-  # "/disk2b/yzhang/feater_test1/PRO/PRO_14_e632ce2b.pdb"
-  # "/MieT5/MyRepos/FEater/feater/scripts/test.h5"
+  
+  # python /MieT5/MyRepos/FEater/feater/scripts/view_traj.py -t /media/yzhang/MieT72/Data/feater_database_coord/Topology_ASN.pdb -f 1  /media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_ASN.h5 -a 1 -am @C,CA,N
+
 
 

@@ -1,4 +1,4 @@
-import os, sys, argparse, time, random
+import os, sys, argparse, time, random, json
 
 import numpy as np
 import h5py as h5
@@ -9,143 +9,108 @@ import torch.optim as optim
 import torch.utils.data as data
 
 from feater.models.voxnet import VoxNet
-from feater import io, dataloader
+from feater import io, dataloader, utils
 
 
-class VoxelDataset(data.Dataset):
-  """
-  Supports constant time random access to the dataset
-  """
-  def __init__(self, hdffiles:list):
-    self.hdffiles = []
-    self.total_entries = 0
-
-    with io.hdffile(hdffiles[0], "r") as h5file:
-      h5file.draw_structure()
-    for file in hdffiles:
-      h5file = h5.File(file, "r")
-      self.hdffiles.append(h5file)
-      self.total_entries += h5file["label"].shape[0]
-      self.shape = np.array(h5file["shape"], dtype=np.int32)
-
-    self.idx_to_file = np.zeros(self.total_entries, dtype=np.uint8)
-    self.idx_to_position = np.zeros(self.total_entries, dtype=np.uint32)
-    self.idx_to_slice_start = np.zeros(self.total_entries, dtype=np.uint32)
-    self.idx_to_slice_end = np.zeros(self.total_entries, dtype=np.uint32)
-    memsize = self.idx_to_file.nbytes + self.idx_to_position.nbytes + self.idx_to_slice_start.nbytes + self.idx_to_slice_end.nbytes
-    print(f"The maps of the {self.total_entries} entries occupies {memsize / 1024 / 1024:6.2f} MB or {memsize / 1024 / 1024 / 1024:6.2f} GB.")
-    global_ind = 0
-    for fidx, file in enumerate(self.hdffiles):
-      entry_nr_i = file["label"].shape[0]
-      size_0 = file["shape"][0]
-      starts = np.arange(entry_nr_i) * size_0
-      ends = starts + size_0
-      if ends[-1] != file["voxel"].shape[0]:
-        raise ValueError(f"Unmatched array end indices: {ends[-1]} vs {file['voxel'].shape[0]}")
-      self.idx_to_position[global_ind:global_ind+entry_nr_i] = np.arange(entry_nr_i)
-      self.idx_to_file[global_ind: global_ind + entry_nr_i] = fidx
-      self.idx_to_slice_start[global_ind:global_ind+entry_nr_i] = starts
-      self.idx_to_slice_end[global_ind:global_ind+entry_nr_i] = ends
-      global_ind += entry_nr_i
-
-  def __del__(self):
-    for file in self.hdffiles:
-      file.close()
-    # Set the arrays to size 0
-    self.idx_to_position.resize(0)
-    self.idx_to_file.resize(0)
-    self.idx_to_slice_start.resize(0)
-    self.idx_to_slice_end.resize(0)
-
-  def __getitem__(self, index):
-    # Get the file
-    if index >= self.total_entries:
-      raise IndexError(f"Index {index} is out of range. The dataset has {self.total_entries} entries.")
-    file_idx = self.idx_to_file[index]
-    slice_start = self.idx_to_slice_start[index]
-    slice_end = self.idx_to_slice_end[index]
-    position = self.idx_to_position[index]
-
-    voxel = self.hdffiles[file_idx]["voxel"][slice_start:slice_end]
-    label = self.hdffiles[file_idx]["label"][position]
-    voxel = np.asarray([voxel], dtype=np.float32)
-    label = np.array(label, dtype=np.int64)
-    voxel = torch.from_numpy(voxel)
-    return voxel, label
-
-
-  def __len__(self):
-    return self.total_entries
-
-  def retrieve(self, entry_list):
-    # Manual data retrieval
-    data = np.zeros((len(entry_list), 1, self.shape[0], self.shape[1], self.shape[2]), dtype=np.float32)
-    label = np.zeros(len(entry_list), dtype=np.int64)
-    for idx, entry in enumerate(entry_list):
-      voxel, l = self.__getitem__(entry)
-      data[idx, ...] = voxel
-      label[idx] = l
-    data = torch.from_numpy(data)
-    label = torch.from_numpy(label)
-    return data, label
-
-
-
+def evaluation(classifier, dataset, usecuda=True, batch_size=256, process_nr=32):
+  print("Start evaluation...")
+  from torch import Tensor
+  classifier = classifier.eval()
+  pred = []
+  label = []
+  for i, data in enumerate(dataset.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR)):
+    valid_data, valid_label = data
+    if usecuda:
+      valid_data, valid_label = valid_data.cuda(), valid_label.cuda()
+    ret = classifier(valid_data)
+    if isinstance(ret, tuple):
+      pred_choice = ret[0]
+    elif isinstance(ret, Tensor):
+      pred_choice = ret
+    else:
+      raise ValueError(f"Unexpected return type {type(ret)}")
+    pred_choice = pred_choice.data.max(1)[1]
+    pred += pred_choice.cpu().tolist()
+    label += valid_label.cpu().tolist()
+  return pred, label
 
 
 
 def parse_args():
   parser = argparse.ArgumentParser(description="Train VoxNet")
-
+  parser.add_argument("-train", "--training_data", type=str, help="The file writes all of the absolute path of h5 files of training data set")
+  parser.add_argument("-valid", "--validation_data", type=str, help="The file writes all of the absolute path of h5 files of validation data set")
+  parser.add_argument("-test", "--test_data", type=str, help="The file writes all of the absolute path of h5 files of test data set")
+  parser.add_argument("-o", "--output_folder", type=str, default="cls", help="Output folder")
+  parser.add_argument("-lr", "--learning_rate", type=float, default=0.001, help="Learning rate")
+  parser.add_argument("-itv", "--interval", type=int, default=5, help="How many batches to wait before logging training status")
+  parser.add_argument("-b", "--batch_size", type=int, default=256, help="Batch size")
+  parser.add_argument("-e", "--epochs", type=int, default=1, help="Number of epochs")
+  parser.add_argument("--data_workers", type=int, default=4, help="Number of workers for data loading")
   parser.add_argument("--manualSeed", type=int, help="Manual seed")
-  parser.add_argument("--load_model", type=str, default="", help="The model to load")
-  args = parser.parse_args()
-  # known_args, unknown_args = parser.parse_known_args()
-  args.cuda = torch.cuda.is_available()
+  parser.add_argument("--pretrained", type=str, default=None, help="Pretrained model path")
+  parser.add_argument("--start_epoch", type=int, default=0, help="Start epoch")
+  parser.add_argument("-v", "--verbose", default=0, type=int, help="Verbose printing while training")
 
+  args = parser.parse_args()
+
+  args.cuda = torch.cuda.is_available()
+  if not args.manualSeed:
+    args.seed = int(time.perf_counter().__str__().split(".")[-1])
+  else:
+    args.seed = int(args.manualSeed)
+  # if (not args.training_data) or (not os.path.exists(args.training_data)):
+  #   parser.print_help()
+  #   raise ValueError(f"The training data file {args.training_data} does not exist.")
+  # if (not args.validation_data) or (not os.path.exists(args.validation_data)):
+  #   parser.print_help()
+  #   raise ValueError(f"The validation data file {args.validation_data} does not exist.")
+  # if (not args.test_data) or (not os.path.exists(args.test_data)):
+  #   parser.print_help()
+  #   raise ValueError(f"The test data file {args.test_data} does not exist.")
+  # if (not args.output_folder) or (not os.path.exists(args.output_folder)):
+  #   parser.print_help()
+  #   raise ValueError(f"The output folder {args.output_folder} does not exist.")
   return args
 
 if __name__ == "__main__":
   args = parse_args()
-  print(args)
-  if args.manualSeed is None:
-    print("Randomizing the Seed")
-    args.manualSeed = random.randint(1, 10000)
-  else:
-    print(f"Using manual seed {args.manualSeed}")
+  SETTINGS = json.dumps(vars(args), indent=2)
+  print("Settings of this training:")
+  print(SETTINGS)
 
-  random.seed(args.manualSeed)
-  torch.manual_seed(args.manualSeed)
-  BATCH_SIZE = 256
-  EPOCH_NR = 1
-  verbose = False
-  LOAD_MODEL = None
-  OUTPUT_DIR = "/media/yzhang/MieT72/scripts_data/voxel_results"
+  random.seed(args.seed)
+  torch.manual_seed(args.seed)
+  BATCH_SIZE = args.batch_size
+  START_EPOCH = args.start_epoch
+  EPOCH_NR = args.epochs
+  LEARNING_RATE = args.learning_rate
+
+  TRAIN_DATA = os.path.abspath(args.training_data)
+  VALID_DATA = os.path.abspath(args.validation_data)
+  TEST_DATA = os.path.abspath(args.test_data)
+  OUTPUT_DIR = os.path.abspath(args.output_folder)
+
+  INTERVAL = args.interval
+  WORKER_NR = args.data_workers
+  # VERBOSE = True if args.verbose > 0 else False
+  LOAD_MODEL = args.pretrained
+  USECUDA = True if args.cuda else False
 
   st = time.perf_counter()
   # Load the data.
   # NOTE: In Voxel based training, the bottleneck is the SSD data reading.
   # NOTE: Putting the dataset to SSD will significantly speed up the training.
-  # datafiles = "/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_ALA.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_ARG.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_ASN.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_ASP.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_CYS.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_GLN.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_GLU.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_GLY.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_HIS.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_ILE.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_LEU.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_LYS.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_MET.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_PHE.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_PRO.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_SER.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_THR.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_TRP.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_TYR.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TrainingSet_VAL.h5"
-  datafiles = "/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_ALA.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_ARG.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_ASN.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_ASP.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_CYS.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_GLN.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_GLU.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_GLY.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_HIS.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_ILE.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_LEU.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_LYS.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_MET.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_PHE.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_PRO.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_SER.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_THR.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_TRP.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_TYR.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TrainingSet_VAL.h5"
-  datafiles = datafiles.strip("%").split("%")
-  training_data = dataloader.VoxelDataset(datafiles)
-  loader_training = data.DataLoader(training_data, batch_size=BATCH_SIZE, shuffle=True, num_workers=16)
+  trainingfiles = utils.checkfiles(TRAIN_DATA)
+  training_data = dataloader.VoxelDataset(trainingfiles)
+  # loader_train = data.DataLoader(training_data, batch_size=BATCH_SIZE, shuffle=True, num_workers=WORKER_NR)
 
-  # testdatafiles = "/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_ALA.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_ARG.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_ASN.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_ASP.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_CYS.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_GLN.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_GLU.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_GLY.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_HIS.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_ILE.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_LEU.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_LYS.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_MET.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_PHE.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_PRO.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_SER.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_THR.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_TRP.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_TYR.h5%/media/yzhang/MieT72/Data/feater_database_voxel/TestSet_VAL.h5%"
-  testdatafiles ="/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_ALA.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_ARG.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_ASN.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_ASP.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_CYS.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_GLN.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_GLU.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_GLY.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_HIS.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_ILE.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_LEU.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_LYS.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_MET.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_PHE.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_PRO.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_SER.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_THR.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_TRP.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_TYR.h5%/diskssd/yzhang/Data_test/feater_database_voxel/TestSet_VAL.h5"
-  testdatafiles = testdatafiles.strip("%").split("%")
-  test_data = dataloader.VoxelDataset(testdatafiles)
-  loader_test = data.DataLoader(test_data, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+  validfiles = utils.checkfiles(VALID_DATA)
+  valid_data = dataloader.VoxelDataset(validfiles)
+  loader_valid = data.DataLoader(valid_data, batch_size=BATCH_SIZE, shuffle=True, num_workers=WORKER_NR)
+
+
   print(f"Dataloader creation took: {(time.perf_counter() - st)*1e3 :8.2f} ms")
-
-  print(len(training_data), len(test_data))
-
-  # for i in np.linspace(0, len(training_data)-1, 100, dtype=np.int32):
-  #   st_time = time.perf_counter()
-  #   voxel, label = training_data[i]
-  #   print(f"Retrieval of {i:8} took: {(time.perf_counter() - st_time)*1e3:6.2f} ms; Number of points: {voxel.shape[0]}; Residue: {label}")
-  # exit(1)
 
   # VoxNet model
   voxnet = VoxNet(n_classes=20)
@@ -157,28 +122,19 @@ if __name__ == "__main__":
   optimizer = optim.Adam(voxnet.parameters(), lr=1e-4)
   criterion = nn.CrossEntropyLoss()
 
-  # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.5)
+  scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.5)
 
-  for epoch in range(EPOCH_NR):
+  for epoch in range(START_EPOCH, EPOCH_NR):
     print("#" * 80)
     print(f"Running the epoch {epoch}/{EPOCH_NR}")
     st = time.perf_counter()
-    # mini_batches = np.array_split(np.arange(len(training_data)), (len(loader_training)+EPOCH_NR)//EPOCH_NR)
-    # shapes = [subarray.shape for subarray in mini_batches]
-    # print(np.unique(shapes, return_counts=True), len(training_data))
-    # print(shapes)
-    # exit(1)
-    # for i, batch in enumerate(mini_batches):
-    for i, data in enumerate(loader_training):
+    for i, batch in enumerate(training_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR)):
       if i > 0:
         t_dataloader = time.perf_counter() - time_finish
       st_load = time.perf_counter()
-      inputs, labels = data
-      # inputs, labels = training_data.retrieve(batch)
+      inputs, labels = batch
       inputs, labels = inputs.cuda(), labels.cuda()
       time_to_gpu = time.perf_counter() - st_load
-
-      # print(f"Time to put data to GPU: {(time.perf_counter() - st_load)*1e3:8.3f} ms")
 
       # zero the parameter gradients
       optimizer.zero_grad()
@@ -193,37 +149,38 @@ if __name__ == "__main__":
       preds = outputs.data.max(1)[1]
       correct = preds.eq(labels.data).cpu().sum()
       acc = correct * 100. / BATCH_SIZE
-      print(f"Batch {i}/{len(loader_training)}: Accuracy: {acc:6.2f} %; Loss: {loss.item():8.4f};")
-      # print(f"Time to load: {time_load*1e3:8.2f} ms; Time to train: {time_train*1e3:8.2f} ms")
+      print(f"Batch {i}/{len(training_data)//BATCH_SIZE}: Accuracy: {acc:6.2f} %; Loss: {loss.item():8.4f};")
 
       if (i+1) % 50 == 0:
         # Check the accuracy on the test set
         st = time.perf_counter()
-        test_data, test_labels = next(loader_test.__iter__())
+        test_data, test_labels = next(loader_valid.__iter__())
         test_data, test_labels = test_data.cuda(), test_labels.cuda()
         voxnet = voxnet.eval()
         test_outputs = voxnet(test_data)
         test_preds = test_outputs.data.max(1)[1]
         test_correct = test_preds.eq(test_labels.data).cpu().sum()
-        test_acc = test_correct * 100. / BATCH_SIZE
+        test_acc = test_correct * 100.0 / BATCH_SIZE
         loss = criterion(test_outputs, test_labels)
         print(f"Test set Accuracy: {test_acc:6.2f} %; Loss: {loss.item():8.4f}; Time: {(time.perf_counter() - st)*1e3:8.2f} ms")
 
-      # if i > 0:
-      #   t_lastbatch = time.perf_counter() - time_finish
-      #   ##### time_to_gpu # t_dataloader # time_train
-      #   print(f"Batch {i:4d}/{len(loader_training)} takes {t_lastbatch*1e3:8.3f} ms; Dataloader: {t_dataloader*1e3:8.3f} ms; Data to GPU: {time_to_gpu*1e3:8.3f} ms; Train: {time_train*1e3:8.3f} ms")
-
       time_finish = time.perf_counter()
-    # scheduler.step()
+    scheduler.step()
     # Save the model etc...
     print("^" * 80)
-    modelfile_output = os.path.join(os.path.abspath(OUTPUT_DIR), f"pointnet_coord_{epoch}.pth")
-
-
-
+    modelfile_output = os.path.join(os.path.abspath(OUTPUT_DIR), f"voxnet_{epoch}.pth")
+    torch.save(voxnet.state_dict(), modelfile_output)
+    pred, label = evaluation(voxnet, valid_data)
+    conf_mtx_output = os.path.join(os.path.abspath(OUTPUT_DIR), f"voxnet_confmatrix_{epoch}.png")
+    utils.confusion_matrix(pred, label, output_file=conf_mtx_output)
 
   print('Finished Training')
-
+  test_data = utils.checkfiles(TEST_DATA)
+  test_data = dataloader.VoxelDataset(test_data)
+  dataloader_test = data.DataLoader(test_data, batch_size=BATCH_SIZE, shuffle=True, num_workers=WORKER_NR)
+  pred, label = evaluation(voxnet, valid_data)
+  print(f"Final accuracy: {np.sum(np.array(pred) == np.array(label)) / len(pred):.4f}")
+  conf_mtx_output = os.path.join(os.path.abspath(OUTPUT_DIR), "voxnet_confmatrix_final.png")
+  utils.confusion_matrix(pred, label, output_file=conf_mtx_output)
 
 

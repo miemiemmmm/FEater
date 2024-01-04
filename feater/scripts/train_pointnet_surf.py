@@ -116,14 +116,24 @@ if __name__ == "__main__":
 
   st = time.perf_counter()
   trainingfiles = utils.checkfiles(TRAIN_DATA)
-  training_data = dataloader.CoordDataset(trainingfiles, target_np=PADDING_NPOINTS)
+  training_data = dataloader.SurfDataset(trainingfiles, target_np=PADDING_NPOINTS)
   dataloader_train = data.DataLoader(training_data, batch_size=BATCH_SIZE, shuffle=True, num_workers=WORKER_NR)
 
   validfiles = utils.checkfiles(VALID_DATA)
-  valid_data = dataloader.CoordDataset(validfiles, target_np=PADDING_NPOINTS)
+  valid_data = dataloader.SurfDataset(validfiles, target_np=PADDING_NPOINTS)
   dataloader_valid = data.DataLoader(valid_data, batch_size=BATCH_SIZE, shuffle=True, num_workers=WORKER_NR)
 
   print(f"The dataset has {len(training_data)} entries; Validation set has {len(valid_data)} entries.")
+
+  # t_total = 0
+  # n = 1024
+  # for i in np.random.choice(len(training_data)-1, n).astype(np.int32):
+  #   tmp_st = time.perf_counter()
+  #   _, _ = training_data[i]
+  #   t_diff = time.perf_counter() - tmp_st
+  #   t_total += t_diff
+  #   print(f"Entry {i}: {training_data[i][1]}; Time: {t_diff*1e3:8.3f} ms")
+  # print(f"Total time: {t_total*1e3:8.3f} ms; Average time: {t_total*1e3/n:8.3f} ms")
 
   classifier = PointNetCls(k=20, feature_transform=False)
   if LOAD_MODEL and len(LOAD_MODEL) > 0:
@@ -140,9 +150,9 @@ if __name__ == "__main__":
     print("#" * 80)
     print(f"Running the epoch {epoch}/{EPOCH_NR}")
     st = time.perf_counter()
-    for i, batch in enumerate(dataloader_train):
+    for i, batch in enumerate(training_data.mini_batches()):
       train_data, train_label = batch
-      train_data = train_data.transpose(2, 1)  # Important: Move the coordinate's 3 dim as channels of the data
+      train_data = train_data.transpose(2, 1)  # Move the coordinate 3 dim to channels of dimensions
       if USECUDA:
         train_data, train_label = train_data.cuda(), train_label.cuda()
 
@@ -170,6 +180,7 @@ if __name__ == "__main__":
         pred_choice = pred.data.max(1)[1]
         correct = pred_choice.eq(valid_label.data).cpu().sum()
         print(f"Validation: Loss: {loss.item():.4f}; Accuracy: {correct.item()/float(valid_label.size()[0]):.4f}")
+
     scheduler.step()
     # Save the model
     print(f"Epock {epoch} takes {time.perf_counter() - st:.2f} seconds, saving the model and confusion matrix")
@@ -183,7 +194,7 @@ if __name__ == "__main__":
   # Final evaluation on test set
   print("Final evaluation")
   test_data = utils.checkfiles(TEST_DATA)
-  test_data = dataloader.CoordDataset(test_data, target_np=PADDING_NPOINTS)
+  test_data = dataloader.SurfDataset(test_data, target_np=PADDING_NPOINTS)
   dataloader_test = data.DataLoader(test_data, batch_size=BATCH_SIZE, shuffle=True, num_workers=WORKER_NR)
   pred, label = evaluation(classifier, dataloader_test)
   print(f"Final accuracy: {np.sum(np.array(pred) == np.array(label)) / len(pred):.4f}")

@@ -13,6 +13,7 @@ SETTINGS = {
   "write_surf": False,
   "output_folder": "/tmp/feater_test"
 }
+
 def update_config(**kwargs):
   global SETTINGS
   for key, value in kwargs.items():

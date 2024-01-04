@@ -45,8 +45,8 @@ def make_hdf(hdf_name:str, coord_files:list, **kwargs):
 
     # Initialize the buffers for different types of data
     label_buffer = np.full((output_interval), -1, dtype=np.int32)
-    xyzr_st_buffer = np.zeros((output_interval), dtype=np.int32)
-    xyzr_ed_buffer = np.zeros((output_interval), dtype=np.int32)
+    xyzr_st_buffer = np.zeros((output_interval), dtype=np.uint64)
+    xyzr_ed_buffer = np.zeros((output_interval), dtype=np.uint64)
     vert_st_buffer = np.zeros((output_interval), dtype=np.uint64)
     vert_ed_buffer = np.zeros((output_interval), dtype=np.uint64)
     face_st_buffer = np.zeros((output_interval), dtype=np.uint64)
@@ -64,7 +64,7 @@ def make_hdf(hdf_name:str, coord_files:list, **kwargs):
     for fidx, file in enumerate(coord_files):
       file = os.path.abspath(file)
       verts, faces, xyzr = mol_to_surf(file, spacing=SurfConfig["grid_spacing"], smooth_step=SurfConfig["smooth_step"], slice_number=SurfConfig["slice_number"])
-      elems = np.array(ptload(file).top.mass, dtype=np.int32)
+      elems = np.array(ptload(file).top.mass).round().astype(np.int32)
 
       nr_verts = verts.shape[0]
       nr_faces = faces.shape[0]
@@ -143,18 +143,18 @@ def make_hdf(hdf_name:str, coord_files:list, **kwargs):
         utils.add_data_to_hdf(f, "vertices", vertex_buffer, dtype=np.float32, maxshape=[None, 3], compression="gzip", compression_opts=1)
         utils.add_data_to_hdf(f, "faces", face_buffer, dtype=np.int32, maxshape=[None, 3], compression="gzip", compression_opts=1)
         utils.add_data_to_hdf(f, "label", label_buffer, dtype=np.int32, maxshape=[None])
-        utils.add_data_to_hdf(f, "coord_start", xyzr_st_buffer, dtype=np.int32, maxshape=[None])
-        utils.add_data_to_hdf(f, "coord_end", xyzr_ed_buffer, dtype=np.int32, maxshape=[None])
-        utils.add_data_to_hdf(f, "vert_start", vert_st_buffer, dtype=np.uint64, maxshape=[None])
-        utils.add_data_to_hdf(f, "vert_end", vert_ed_buffer, dtype=np.uint64, maxshape=[None])
-        utils.add_data_to_hdf(f, "face_start", face_st_buffer, dtype=np.uint64, maxshape=[None])
-        utils.add_data_to_hdf(f, "face_end", face_ed_buffer, dtype=np.uint64, maxshape=[None])
-        utils.add_data_to_hdf(f, "elem_mass", elems_buffer, dtype=np.int32, maxshape=[None])
+        utils.add_data_to_hdf(f, "coord_starts", xyzr_st_buffer, dtype=np.uint64, maxshape=[None])
+        utils.add_data_to_hdf(f, "coord_ends", xyzr_ed_buffer, dtype=np.uint64, maxshape=[None])
+        utils.add_data_to_hdf(f, "vert_starts", vert_st_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=1)
+        utils.add_data_to_hdf(f, "vert_ends", vert_ed_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=1)
+        utils.add_data_to_hdf(f, "face_starts", face_st_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=1)
+        utils.add_data_to_hdf(f, "face_ends", face_ed_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=1)
+        utils.add_data_to_hdf(f, "element_mass", elems_buffer, dtype=np.int32, maxshape=[None])
 
         # Reset the buffers and buffer pointers
         label_buffer = np.full((output_interval), -1, dtype=np.int32)
-        xyzr_st_buffer = np.zeros((output_interval), dtype=np.int32)
-        xyzr_ed_buffer = np.zeros((output_interval), dtype=np.int32)
+        xyzr_st_buffer = np.zeros((output_interval), dtype=np.uint64)
+        xyzr_ed_buffer = np.zeros((output_interval), dtype=np.uint64)
         vert_st_buffer = np.zeros((output_interval), dtype=np.uint64)
         vert_ed_buffer = np.zeros((output_interval), dtype=np.uint64)
         face_st_buffer = np.zeros((output_interval), dtype=np.uint64)
@@ -174,6 +174,8 @@ def make_hdf(hdf_name:str, coord_files:list, **kwargs):
 
 def parse_args():
   parser = argparse.ArgumentParser(description="Make HDF5")
+  parser.add_argument("-i", "--input", type=str, help="The file writes all of the absolute path of coordinate files")
+  parser.add_argument("-o", "--output", type=str, help="The output HDF5 file")
   args = parser.parse_args()
   return args
 
@@ -186,21 +188,21 @@ def console_interface():
 
 
 if __name__ == "__main__":
-  filelists = "/media/yzhang/MieT72/Data/feater_database/ValidationSet_ALA.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_ARG.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_ASN.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_ASP.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_CYS.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_GLN.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_GLU.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_GLY.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_HIS.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_ILE.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_LEU.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_LYS.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_MET.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_PHE.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_PRO.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_SER.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_THR.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_TRP.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_TYR.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_VAL.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ALA.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ARG.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ASN.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ASP.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_CYS.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_GLN.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_GLU.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_GLY.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_HIS.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ILE.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_LEU.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_LYS.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_MET.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_PHE.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_PRO.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_SER.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_THR.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_TRP.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_TYR.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_VAL.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ALA.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ARG.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ASN.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ASP.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_CYS.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_GLN.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_GLU.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_GLY.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_HIS.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ILE.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_LEU.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_LYS.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_MET.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_PHE.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_PRO.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_SER.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_THR.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_TRP.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_TYR.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_VAL.txt"
-  listfiles = filelists.strip("%").split("%")
-  print(f"Processing {len(listfiles)} list files")
-
-  basepath = "/media/yzhang/MieT72/Data/feater_database"
-  outputdir = "/media/yzhang/MieT72/Data/feater_database_surf"
-
-  for listfile in listfiles[50:51]:
-    resname = os.path.basename(listfile).split(".")[0].split("_")[1]
-    _filename = os.path.basename(listfile).split(".")[0]
-    outfile = os.path.join(outputdir, f"{_filename}.h5")
-    files = utils.checkfiles(listfile, basepath=basepath)   # TODO: remove the slicing
-    print(f"Found {len(files)} files in the {listfile}, will write to {outfile}")
-    make_hdf(outfile, files)
-    # exit(0)   # TODO: remove this line
+  console_interface()
+  # filelists = "/media/yzhang/MieT72/Data/feater_database/ValidationSet_ALA.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_ARG.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_ASN.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_ASP.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_CYS.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_GLN.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_GLU.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_GLY.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_HIS.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_ILE.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_LEU.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_LYS.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_MET.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_PHE.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_PRO.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_SER.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_THR.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_TRP.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_TYR.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_VAL.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ALA.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ARG.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ASN.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ASP.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_CYS.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_GLN.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_GLU.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_GLY.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_HIS.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ILE.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_LEU.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_LYS.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_MET.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_PHE.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_PRO.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_SER.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_THR.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_TRP.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_TYR.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_VAL.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ALA.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ARG.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ASN.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ASP.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_CYS.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_GLN.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_GLU.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_GLY.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_HIS.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ILE.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_LEU.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_LYS.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_MET.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_PHE.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_PRO.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_SER.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_THR.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_TRP.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_TYR.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_VAL.txt"
+  # listfiles = filelists.strip("%").split("%")
+  # print(f"Processing {len(listfiles)} list files")
+  #
+  # basepath = "/media/yzhang/MieT72/Data/feater_database"
+  # outputdir = "/media/yzhang/MieT72/Data/feater_database_surf"
+  #
+  # for listfile in listfiles[50:51]:
+  #   resname = os.path.basename(listfile).split(".")[0].split("_")[1]
+  #   _filename = os.path.basename(listfile).split(".")[0]
+  #   outfile = os.path.join(outputdir, f"{_filename}.h5")
+  #   files = utils.checkfiles(listfile, basepath=basepath)
+  #   print(f"Found {len(files)} files in the {listfile}, will write to {outfile}")
+  #   make_hdf(outfile, files)
 
 
 

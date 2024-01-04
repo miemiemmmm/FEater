@@ -9,24 +9,11 @@ import pytraj as pt
 from feater import RES2LAB, io, utils
 
 
-# def checkfiles(file_list:str) -> list:
-#   with open(file_list, 'r') as f:
-#     files = f.read().strip("\n").split('\n')
-#     for file in files:
-#       if not os.path.isfile(file):
-#         raise ValueError(f"File {file} does not exist.")
-#   return files
-# def add_data_to_hdf(hdffile, dataset_name:str, data:np.ndarray, **kwargs):
-#   if dataset_name not in hdffile.keys():
-#     hdffile.create_dataset(dataset_name, data=data, **kwargs)
-#   else:
-#     hdffile.append_entries(dataset_name, data)
-
-
 def read_coord(file:str) -> np.ndarray:
   traj = pt.load(file)
-  coord = traj.xyz[-1]
-  return coord
+  coord = np.asarray(traj.xyz[0])
+  elems = np.array(traj.top.mass).round().astype(np.int32)
+  return coord, elems
 
 
 def make_hdf(hdf_name:str, coord_files:list, **kwargs):
@@ -34,6 +21,7 @@ def make_hdf(hdf_name:str, coord_files:list, **kwargs):
   coord_buffer = np.array([])
   label_buffer = np.array([])
   nr_atoms_buffer = np.array([])
+  elems_buffer = np.array([])
   start_idxs_buffer = np.array([])
   end_idxs_buffer = np.array([])
   with io.hdffile(hdf_name, 'w') as f:
@@ -41,8 +29,9 @@ def make_hdf(hdf_name:str, coord_files:list, **kwargs):
     global_start_idx = 0
     for file in coord_files:
       file = os.path.abspath(file)
-      coordi = read_coord(file)
+      coordi, elemi = read_coord(file)
       coord_f32 = np.array(coordi, dtype=np.float32)
+      elem_i32 = np.array(elemi, dtype=np.int32)
       nr_atoms = coord_f32.shape[0]
       restype = os.path.basename(file)[:3]
       next_start_idx = global_start_idx
@@ -56,30 +45,29 @@ def make_hdf(hdf_name:str, coord_files:list, **kwargs):
         coord_buffer = np.concatenate((coord_buffer, coord_f32), axis=0)
         label_buffer = np.concatenate((label_buffer, np.array([labeli], dtype=np.int32)), axis=0)
         nr_atoms_buffer = np.concatenate((nr_atoms_buffer, np.array([nr_atoms], dtype=np.int32)), axis=0)
-        start_idxs_buffer = np.concatenate((start_idxs_buffer, np.array([next_start_idx], dtype=np.int32)), axis=0)
-        end_idxs_buffer = np.concatenate((end_idxs_buffer, np.array([next_end_idx], dtype=np.int32)), axis=0)
+        start_idxs_buffer = np.concatenate((start_idxs_buffer, np.array([next_start_idx], dtype=np.uint64)), axis=0)
+        end_idxs_buffer = np.concatenate((end_idxs_buffer, np.array([next_end_idx], dtype=np.uint64)), axis=0)
+        elems_buffer = np.concatenate((elems_buffer, elem_i32), axis=0)
       else:
         coord_buffer = np.array(coord_f32, dtype=np.float32)
         label_buffer = np.array([labeli], dtype=np.int32)
         nr_atoms_buffer = np.array([nr_atoms], dtype=np.int32)
-        start_idxs_buffer = np.array([next_start_idx], dtype=np.int32)
-        end_idxs_buffer = np.array([next_end_idx], dtype=np.int32)
+        start_idxs_buffer = np.array([next_start_idx], dtype=np.uint64)
+        end_idxs_buffer = np.array([next_end_idx], dtype=np.uint64)
+        elems_buffer = np.array(elem_i32, dtype=np.int32)
 
       c += 1
-
       if ((c) % 1000 == 0) or (c == len(coord_files)):
         print(f"Processing file {c:8d}/{len(coord_files):<8d}: This slice takes: {time.perf_counter()-st:6.3f} seconds")
         st = time.perf_counter()
         print(f"Writing {len(label_buffer)} entries to the HDF file: {hdf_name}")
-        coord_buffer = np.array(coord_buffer, dtype=np.float32)
-        label_buffer = np.array(label_buffer, dtype=np.int32)
-        nr_atoms_buffer = np.array(nr_atoms_buffer, dtype=np.int32)
 
-        utils.add_data_to_hdf(f, "coordinates", coord_buffer, dtype=np.float32, maxshape=[None, 3], **kwargs)
-        utils.add_data_to_hdf(f, "nr_atoms", nr_atoms_buffer, dtype=np.int32, maxshape=[None], **kwargs)
-        utils.add_data_to_hdf(f, "label", label_buffer, dtype=np.int32, maxshape=[None], **kwargs)
-        utils.add_data_to_hdf(f, "start_indices", start_idxs_buffer, dtype=np.int32, maxshape=[None], **kwargs)
-        utils.add_data_to_hdf(f, "end_indices", end_idxs_buffer, dtype=np.int32, maxshape=[None], **kwargs)
+        utils.add_data_to_hdf(f, "coordinates", coord_buffer, dtype=np.float32, maxshape=[None, 3], chunks=True, compression="gzip", compression_opts=1)
+        utils.add_data_to_hdf(f, "atom_number", nr_atoms_buffer, dtype=np.int32, maxshape=[None], chunks=True)
+        utils.add_data_to_hdf(f, "label", label_buffer, dtype=np.int32, maxshape=[None], chunks=True)
+        utils.add_data_to_hdf(f, "coord_starts", start_idxs_buffer, dtype=np.uint64, maxshape=[None], chunks=True)
+        utils.add_data_to_hdf(f, "coord_ends", end_idxs_buffer, dtype=np.uint64, maxshape=[None], chunks=True)
+        utils.add_data_to_hdf(f, "elements", elems_buffer, dtype=np.int32, maxshape=[None], chunks=True)
 
         if  "entry_number" not in f.keys():
           f.create_dataset('entry_number', data= np.array([len(label_buffer)], dtype=np.int32), dtype = np.int32, maxshape = [1], **kwargs)
@@ -88,7 +76,6 @@ def make_hdf(hdf_name:str, coord_files:list, **kwargs):
         coord_buffer = np.array([])
         label_buffer = np.array([])
         nr_atoms_buffer = np.array([])
-        # f.draw_structure()
 
     f.draw_structure()
     final_entry_nr = f["entry_number"][0]
