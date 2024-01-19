@@ -2,6 +2,7 @@ import os, time
 import multiprocessing as mp
 
 import numpy as np
+import open3d as o3d
 import h5py as h5
 import torch
 import torch.utils.data as data
@@ -17,9 +18,9 @@ __all__ = [
 ]
 
 
-def readdata(input_file, key, start, end):
+def readdata(input_file, keyword, theslice):
   with io.hdffile(input_file, "r") as h5file:
-    ret_data = h5file[key][start:end]
+    ret_data = h5file[keyword][theslice]
   return ret_data
 
 
@@ -60,91 +61,116 @@ def split_array(input_array, batch_size):
       return np.array_split(input_array[:-final_batch_size], bin_nr-1) + [input_array[-final_batch_size:]]
 
 
-class CoordDataset(data.Dataset):
-  """
-  Supports constant time random access to the dataset
-  """
+class BaseDataset(data.Dataset): 
+  def __init__(self, hdffiles: list): 
+    # Initialize the hdffiles and general information
+    self.hdffiles = []
+    self.total_entries = 0
+    # Prepare the map size for the dataset
+    for file in hdffiles:
+      self.hdffiles.append(file)
+      with io.hdffile(file, "r") as h5file:
+        self.total_entries += h5file["label"].shape[0]
+
+    # Initial behaviors
+    self.file_map = np.zeros(self.total_entries, dtype=np.uint64)
+    self.position_map = np.zeros(self.total_entries, dtype=np.uint64)
+    self.start_map = np.zeros(self.total_entries, dtype=np.uint64)
+    self.end_map = np.zeros(self.total_entries, dtype=np.uint64)
+
+    with io.hdffile(hdffiles[0], "r") as h5file:
+      h5file.draw_structure()
+
+  def __len__(self):
+    return self.total_entries
+
+  # def __del__(self): 
+  #   # Set the arrays to size 0
+  #   self.position_map.resize(0)
+  #   self.file_map.resize(0)
+  #   self.start_map.resize(0)
+  #   self.end_map.resize(0)
+  
+  def __iter__(self):
+    for i in range(self.total_entries):
+      yield self.__getitem__(i)
+
+  def map_size(self):
+    memsize = self.file_map.nbytes + self.position_map.nbytes + self.start_map.nbytes + self.end_map.nbytes
+    print(f"The maps of the {self.total_entries} entries occupies {memsize / 1024 / 1024:6.2f} MB or {memsize / 1024 / 1024 / 1024:6.2f} GB.")
+    return memsize
+
+  def get_file(self, index):
+    return self.hdffiles[self.file_map[index]]
+  
+  def get_start(self, index):
+    return self.start_map[index]
+  
+  def get_end(self, index):
+    return self.end_map[index]
+  
+  def get_position(self, index):
+    return self.position_map[index]
+
+  def get_slice(self, index):
+    return np.s_[self.get_start(index):self.get_end(index)]
+
+  def mini_batch_task(self, index): 
+    return ()
+
+  # @profile
+  def mini_batches(self, batch_size=512, shuffle=True, process_nr=24):
+    pool = mp.Pool(process_nr)
+    indices = np.arange(self.total_entries)
+    if shuffle:
+      np.random.shuffle(indices)
+    batches = split_array(indices, batch_size)
+    for batch_idx, batch in enumerate(batches): 
+      tasks = [self.mini_batch_task(i) for i in batch]
+      ret_data = pool.starmap(readdata, tasks)
+      _shape = [i.shape for i in ret_data]
+      _shape = tuple(np.max(_shape, axis=0))
+      data_numpy = np.zeros((len(ret_data), *_shape), dtype=np.float32)
+      for i, ret in enumerate(ret_data):
+        if ret.shape != _shape:
+          # Do padding if the shape is heterogeneous
+          theslice = np.s_[tuple(slice(0, i) for i in ret.shape)]
+          data_numpy[i][theslice] = ret
+        else:
+          data_numpy[i, ...] = ret 
+
+      tasks = [(self.get_file(i), self.get_position(i)) for i in batch]
+      labels = pool.starmap(readlabel, tasks)
+      label_numpy = np.array(labels, dtype=np.int64)
+
+      data = torch.from_numpy(data_numpy)
+      label = torch.from_numpy(label_numpy)
+      yield data, label
+
+
+class CoordDataset(BaseDataset):
   def __init__(self, hdffiles:list, target_np=25, padding=True):
     """
     Open the HDF files and generate the map for __getitem__ method to correctly locate the data from a set of HDF5 files
+    Supports constant time random access to the dataset
     Args:
       hdffiles: The list of HDF5 files
       target_np: The target number of points for each residue
     """
-    # Open the HDF5 files
-    self.hdffiles = []
-    self.total_entries = 0
+    super().__init__(hdffiles)
     self.target_np = target_np
-    self.do_padding = padding
-
-    for file in hdffiles:
-      h5file = h5.File(file, "r")
-      self.hdffiles.append(h5file)
-      self.total_entries += h5file["label"].shape[0]
-
-    # Generate the map for __getitem__ method to correctly locate the data from a set of HDF5 files
-    # Number of files should be less than 256 (uint8)
-    self.idx_to_file = np.zeros(self.total_entries, dtype=np.uint8)
-    # Number of total entries should be less than 2^32 (uint32)
-    self.idx_to_position = np.zeros(self.total_entries, dtype=np.uint32)
-    self.idx_to_slice_start = np.zeros(self.total_entries, dtype=np.uint32)
-    self.idx_to_slice_end = np.zeros(self.total_entries, dtype=np.uint32)
-    memsize = self.idx_to_file.nbytes + self.idx_to_position.nbytes + self.idx_to_slice_start.nbytes + self.idx_to_slice_end.nbytes
-    print(f"The maps of the {self.total_entries} entries occupies {memsize / 1024 / 1024:6.2f} MB or {memsize / 1024 / 1024 / 1024:6.2f} GB.")
+    self.do_padding = padding        # When serve as dataloader, do the padding, other wise return the original data
+    
+    # Build the maps for correct data retrieval according the the structure of the HDF5 files
     global_ind = 0
     for fidx, file in enumerate(self.hdffiles):
-      entry_nr_i = file["entry_number"][0]
-      starts_i = file["coord_starts"]
-      ends_i = file["coord_ends"]
-      self.idx_to_position[global_ind: global_ind + entry_nr_i] = np.arange(entry_nr_i)
-      self.idx_to_file[global_ind: global_ind + entry_nr_i] = fidx
-      self.idx_to_slice_start[global_ind: global_ind+entry_nr_i] = starts_i
-      self.idx_to_slice_end[global_ind: global_ind+entry_nr_i] = ends_i
-      global_ind += entry_nr_i
-
-  def padding(self, points):
-    """
-    Pad or subset the points to the target number of points
-    Args:
-      points: The coordinates of the 3D points
-    Returns:
-      points: The padded points
-    TODO: Padding operation might slow down 60% of the data loading time
-    """
-    lb = np.min(points, axis=0)
-    points -= lb                                                                  # TODO: Justify the translation of the points
-    if points.shape[0] < self.target_np:
-      # Choose random points to fill with the result points in the case that the NP < TP
-      # (Number of points VS Target number of points)
-      choices = np.random.choice(self.target_np, points.shape[0], replace=False)
-      order = np.random.choice(np.arange(points.shape[0]), points.shape[0], replace=False)
-      print_copy = points.copy()
-      # choices.sort()     # TODO: Randomize the specific sequence of the PDB convention to avoid the bias
-      # print(f"Padding Choices: {choices.tolist()}")
-      points = np.zeros((self.target_np, 3), dtype=np.float32)                   # TODO: Justify the default values for the point coordinates
-
-      points[choices] = print_copy[order, :]
-      # for i, choice in enumerate(choices):
-      #   _points[choice] = points[i]
-      # points = _points
-    elif points.shape[0] > self.target_np:
-      # Randomly select points in the case that the NP > TP
-      choices = np.random.choice(points.shape[0], self.target_np, replace=False)  # TODO: Justify the choice of random points
-      # choices.sort()                 # TODO: Randomize the specific sequence of the PDB convention to avoid the bias
-      points = points[choices]
-    return points
-
-
-  def __del__(self):
-    """
-    Close and clean the memory and close the opened HDF5 files
-    """
-    for h5file in self.hdffiles:
-      h5file.close()
-    self.idx_to_file.resize(0)
-    self.idx_to_position.resize(0)
-    self.idx_to_slice_start.resize(0)
-    self.idx_to_slice_end.resize(0)
+      with io.hdffile(file, "r") as h5file:
+        entry_nr_i = h5file["label"].shape[0]
+        self.position_map[global_ind: global_ind + entry_nr_i] = np.arange(entry_nr_i)
+        self.file_map[global_ind: global_ind + entry_nr_i] = fidx
+        self.start_map[global_ind: global_ind+entry_nr_i] = np.asarray(h5file["coord_starts"])
+        self.end_map[global_ind: global_ind+entry_nr_i] = np.asarray(h5file["coord_ends"])
+        global_ind += entry_nr_i
 
   def __getitem__(self, index):
     """
@@ -157,260 +183,185 @@ class CoordDataset(data.Dataset):
     """
     if index >= self.total_entries:
       raise IndexError(f"Index {index} is out of range. The dataset has {self.total_entries} entries.")
-    file_index = self.idx_to_file[index]
-    slice_start = self.idx_to_slice_start[index]
-    slice_end = self.idx_to_slice_end[index]
-    label_position = self.idx_to_position[index]
-
-    points = np.array(self.hdffiles[file_index]["coordinates"][slice_start: slice_end], dtype=np.float32)
-    label = self.hdffiles[file_index]["label"][label_position]
+    info = self.mini_batch_task(index)
+    data = readdata(*info)
+    label = readlabel(self.get_file(index), self.get_position(index))
     if self.do_padding:
-      points = self.padding(points)
-    points = torch.from_numpy(points)
+      data = self.padding(data)
+
+    data = np.array(data, dtype=np.float32)
     label = np.array(label, dtype=np.int64)
-    return points, label
+    data = torch.from_numpy(data)
+    label = torch.from_numpy(label)
+    return data, label
+  
+  def mini_batch_task(self, index): 
+    return (self.get_file(index), "coordinates", self.get_slice(index))
 
-  def __len__(self):
-    """
-    Return the total number of entries in the dataset
-    Returns:
-      self.total_entries: The total number of entries in the dataset
-    """
-    return self.total_entries
+  
+  def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, **kwargs):
+    for data, label in super().mini_batches(batch_size=batch_size, shuffle=shuffle, process_nr=process_nr, **kwargs): 
+      data = self.padding_batch(data)
+      yield data, label
+  
+  def padding_batch(self, batch):
+    ret_points = np.zeros((batch.shape[0], self.target_np, batch.shape[2]), dtype=np.float32)
+    batch = batch.numpy()
+    randomization = np.arange(self.target_np)
+    np.random.shuffle(randomization)
+
+    for idx, entry in enumerate(batch):
+      point_nr = np.count_nonzero(np.count_nonzero(entry, axis=1))
+      batch[idx, :point_nr, :] -= np.min(entry[:point_nr, :], axis=0)
+      _randomization = np.arange(min(self.target_np, point_nr))
+      np.random.shuffle(_randomization)
+      if point_nr <= self.target_np:
+        # Choose random points to fill with the result points
+        ret_points[idx, randomization[:point_nr], :] = batch[idx, _randomization, :]
+      elif point_nr > self.target_np:
+        # Randomly select target_np points
+        ret_points[idx, randomization, :] = batch[idx, _randomization[:self.target_np], :]
+    ret_points = torch.from_numpy(ret_points)
+    return ret_points
+    
+  def padding(self, points):
+    # Prerequisite: the points are not yet padded to a fixed length
+    randomization = np.arange(self.target_np)
+    np.random.shuffle(randomization)
+    point_nr = points.shape[0]
+    _randomization = np.arange(point_nr)
+    ret_data = np.zeros((self.target_np, points.shape[1]), dtype=np.float32)
+    if point_nr <= self.target_np:
+      # Choose random points to fill with the result points
+      ret_data[randomization[:point_nr], :] = points[_randomization, :]
+    elif point_nr > self.target_np:
+      # Randomly select target_np points
+      ret_data[randomization, :] = points[_randomization[:self.target_np], :]
+    return ret_data
 
 
-class VoxelDataset(data.Dataset):
-  """
-  Supports constant time random access to the dataset
-  """
+class VoxelDataset(BaseDataset):
   def __init__(self, hdffiles:list):
-    self.hdffiles = []
-    self.total_entries = 0
-    # Get the shape of the voxels and the total number of entries
-    for file in hdffiles:
-      self.hdffiles.append(file)
-      with io.hdffile(file, "r") as h5file:
-        h5file.draw_structure()
-        # h5file = h5.File(file, "r")
-        self.total_entries += h5file["label"].shape[0]
-        self.shape = np.array(h5file["shape"], dtype=np.uint32)
-
-    # Initialize the map for getting the correct location of the data in the HDF5 files
-    self.idx_to_file = np.zeros(self.total_entries, dtype=np.uint8)
-    self.idx_to_position = np.zeros(self.total_entries, dtype=np.uint32)
-    self.idx_to_slice_start = np.zeros(self.total_entries, dtype=np.uint32)
-    self.idx_to_slice_end = np.zeros(self.total_entries, dtype=np.uint32)
-    memsize = self.idx_to_file.nbytes + self.idx_to_position.nbytes + self.idx_to_slice_start.nbytes + self.idx_to_slice_end.nbytes
-    print(f"The maps of the {self.total_entries} entries occupies {memsize / 1024 / 1024:6.2f} MB or {memsize / 1024 / 1024 / 1024:6.2f} GB.")
+    super().__init__(hdffiles)
 
     # Generate the map for __getitem__ method to correctly locate the data from a set of HDF5 files
     global_ind = 0
     for fidx, file in enumerate(self.hdffiles):
       with io.hdffile(file, "r") as h5file:
+        self.shape = np.array(h5file["shape"], dtype=np.uint32)
         entry_nr_i = h5file["label"].shape[0]
         size_0 = h5file["shape"][0]
         starts = np.arange(entry_nr_i) * size_0
         ends = starts + size_0
         if ends[-1] != h5file["voxel"].shape[0]:
           raise ValueError(f"Unmatched array end indices: {ends[-1]} vs {h5file['voxel'].shape[0]}")
-      self.idx_to_position[global_ind:global_ind+entry_nr_i] = np.arange(entry_nr_i)
-      self.idx_to_file[global_ind: global_ind + entry_nr_i] = fidx
-      self.idx_to_slice_start[global_ind:global_ind+entry_nr_i] = starts
-      self.idx_to_slice_end[global_ind:global_ind+entry_nr_i] = ends
+      self.position_map[global_ind:global_ind+entry_nr_i] = np.arange(entry_nr_i)
+      self.file_map[global_ind: global_ind + entry_nr_i] = fidx
+      self.start_map[global_ind:global_ind+entry_nr_i] = starts
+      self.end_map[global_ind:global_ind+entry_nr_i] = ends
       global_ind += entry_nr_i
-
-  def __del__(self):
-    # Set the arrays to size 0
-    self.idx_to_position.resize(0)
-    self.idx_to_file.resize(0)
-    self.idx_to_slice_start.resize(0)
-    self.idx_to_slice_end.resize(0)
 
   def __getitem__(self, index):
     # Get the file
     if index >= self.total_entries:
       raise IndexError(f"Index {index} is out of range. The dataset has {self.total_entries} entries.")
-    file_idx = self.idx_to_file[index]
-    slice_start = self.idx_to_slice_start[index]
-    slice_end = self.idx_to_slice_end[index]
-    position = self.idx_to_position[index]
+    
+    data = readdata(*self.mini_batch_task(index))
+    label = readlabel(self.get_file(index), self.get_position(index))
 
-    voxel = readdata(self.hdffiles[file_idx], "voxel", slice_start, slice_end)
-    label = readlabel(self.hdffiles[file_idx], position)
-    voxel = np.asarray([voxel], dtype=np.float32)
+    # Add the bracket to represent there is one channel
+    data = np.array([data], dtype=np.float32)
     label = np.array(label, dtype=np.int64)
-    voxel = torch.from_numpy(voxel)
-    return voxel, label
+    data = torch.from_numpy(data)
+    label = torch.from_numpy(label)
+    return data, label
   
-  def getitem_info(self, index):
-    if index >= self.total_entries:
-      raise IndexError(f"Index {index} is out of range. The dataset has {self.total_entries} entries.")
-    file_idx = self.idx_to_file[index]
-    slice_start = self.idx_to_slice_start[index]
-    slice_end = self.idx_to_slice_end[index]
-    position = self.idx_to_position[index]
-    h5filename = self.hdffiles[file_idx]
-    return (h5filename, "voxel", slice_start, slice_end)
+  def mini_batch_task(self, index):
+    return (self.get_file(index), "voxel", self.get_slice(index))
 
   def __len__(self):
     return self.total_entries
 
-  def retrieve(self, entry_list):
-    # Manual data retrieval
-    data = np.zeros((len(entry_list), 1, self.shape[0], self.shape[1], self.shape[2]), dtype=np.float32)
-    label = np.zeros(len(entry_list), dtype=np.int64)
-    for idx, entry in enumerate(entry_list):
-      voxel, l = self.__getitem__(entry)
-      data[idx, ...] = voxel
-      label[idx] = l
-    data = torch.from_numpy(data)
-    label = torch.from_numpy(label)
-    return data, label
-
-  def mini_batches(self, batch_size=512, shuffle=True, process_nr=24): 
-    pool = mp.Pool(process_nr)
-    indices = np.arange(self.total_entries)
-    if shuffle:
-      np.random.shuffle(indices)
-    batches = split_array(indices, batch_size)
-    bytes_total = 0                 # TODO
-    st = time.perf_counter()        # TODO
-    for batch_idx, batch in enumerate(batches): 
-      tasks = [self.getitem_info(i) for i in batch]
-      ret_data = pool.starmap(readdata, tasks)
-      data_numpy = np.asarray(ret_data, dtype=np.float32)
-      data_numpy = data_numpy[:, np.newaxis, ...]
-
-      # Benchmark the retrival rate
-      for ret in ret_data:
-        bytes_total += ret.nbytes               # TODO
-      print(f"Batch {batch_idx+1:5d}/{len(batches)}: Retrival speed: {bytes_total / 1024 / 1024 / (time.perf_counter() - st):6.2f} MB/s. Time: {(time.perf_counter() - st)/(batch_idx+1):6.2f} seconds")     #
-
-      tasks = [(self.hdffiles[self.idx_to_file[i]], self.idx_to_position[i]) for i in batch]
-      labels = pool.starmap(readlabel, tasks)
-      label_numpy = np.array(labels, dtype=np.int64)
-
-      data = torch.from_numpy(data_numpy)
-      label = torch.from_numpy(label_numpy)
+  def mini_batches(self, batch_size=512, shuffle=True, process_nr=24):
+    for data, label in super().mini_batches(batch_size=batch_size, shuffle=shuffle, process_nr=process_nr): 
+      data = data[:, np.newaxis, ...]
       yield data, label
 
 
-
-class SurfDataset(data.Dataset):
-  def __init__(self, hdffiles: list, target_np=1024, pool_size=8):
-    self.hdffiles = []
-    self.total_entries = 0
+class SurfDataset(BaseDataset):
+  def __init__(self, hdffiles: list, target_np=1024, padding=True):
+    super().__init__(hdffiles)
     self.target_np = target_np
+    self.do_padding = padding        # When serve as dataloader, do the padding, other wise return the original data
 
-    with io.hdffile(hdffiles[0], "r") as h5file:
-      h5file.draw_structure()
-
-    # Prepare the map size for the dataset
-    for file in hdffiles:
-      self.hdffiles.append(file)
-      with io.hdffile(file, "r") as h5file:
-        self.total_entries += h5file["label"].shape[0]
-
-    self.idx_to_file = np.zeros(self.total_entries, dtype=np.uint8)
-    self.idx_to_position = np.zeros(self.total_entries, dtype=np.uint64)
-    self.idx_to_face_start = np.zeros(self.total_entries, dtype=np.uint64)
-    self.idx_to_face_end = np.zeros(self.total_entries, dtype=np.uint64)
-    self.idx_to_vert_start = np.zeros(self.total_entries, dtype=np.uint64)
-    self.idx_to_vert_end = np.zeros(self.total_entries, dtype=np.uint64)
-
-    memsize = self.idx_to_file.nbytes + self.idx_to_position.nbytes + self.idx_to_face_start.nbytes + self.idx_to_face_end.nbytes + self.idx_to_vert_start.nbytes + self.idx_to_vert_end.nbytes
-    print(f"SurfDataset: The maps of the {self.total_entries} entries occupies {memsize / 1024 / 1024:6.2f} MB")
     global_ind = 0
     for fidx, file in enumerate(hdffiles):
       with io.hdffile(file, "r") as h5file:
         entry_nr_i = h5file["label"].shape[0]
-        self.idx_to_file[global_ind:global_ind + entry_nr_i] = fidx
-        self.idx_to_position[global_ind:global_ind + entry_nr_i] = np.arange(entry_nr_i)
-        self.idx_to_vert_start[global_ind:global_ind + entry_nr_i] = h5file["vert_starts"]
-        self.idx_to_vert_end[global_ind:global_ind + entry_nr_i] = h5file["vert_ends"]
+        self.file_map[global_ind:global_ind + entry_nr_i] = fidx
+        self.position_map[global_ind:global_ind + entry_nr_i] = np.arange(entry_nr_i)
+        self.start_map[global_ind:global_ind + entry_nr_i] = h5file["vert_starts"]
+        self.end_map[global_ind:global_ind + entry_nr_i] = h5file["vert_ends"]
         global_ind += entry_nr_i
-    print(f"SurfDataset: Average vertices per entry: {(self.idx_to_vert_end - self.idx_to_vert_start).mean():.2f}")
-
-
-  def __del__(self):
-    # for file in self.hdffiles:
-    #   file.close()
-    # Set the arrays to size 0
-    self.idx_to_position.resize(0)
-    self.idx_to_file.resize(0)
-    self.idx_to_face_start.resize(0)
-    self.idx_to_face_end.resize(0)
-    self.idx_to_vert_start.resize(0)
-    self.idx_to_vert_end.resize(0)
+    print(f"SurfDataset: Average vertices per entry: {np.mean(self.end_map - self.start_map):8.2f}")
 
   def __getitem__(self, index):
     # Get the file
     if index >= self.total_entries:
       raise IndexError(f"Index {index} is out of range. The dataset has {self.total_entries} entries.")
-    file_idx = self.idx_to_file[index]
-    vert_start = self.idx_to_vert_start[index]
-    vert_end = self.idx_to_vert_end[index]
-    position = self.idx_to_position[index]
-    h5filename = self.hdffiles[file_idx]
+    task = self.mini_batch_task(index)
+    data = readdata(*task)
+    label = readlabel(self.get_file(index), self.get_position(index))
+    if self.do_padding:
+      data = self.padding(data)
 
-    with io.hdffile(h5filename, "r") as h5file:
-      verts = h5file["vertices"][vert_start:vert_end]       # Major bottleneck
-      label = h5file["label"][position]
-    verts = self.padding(verts)
-
-    verts = np.asarray(verts, dtype=np.float32)
+    data = np.array(data, dtype=np.float32)
     label = np.array(label, dtype=np.int64)
-    verts = torch.from_numpy(verts)
-    return verts, label
+    data = torch.from_numpy(data)
+    label = torch.from_numpy(label)
+    return data, label
+
+  def get_label(self, index):
+    return readlabel(self.get_file(index), self.get_position(index))
 
   def mini_batches(self, batch_size=512, shuffle=True, process_nr=24):
-    pool = mp.Pool(process_nr)
-    indices = np.arange(self.total_entries)
-    if shuffle:
-      np.random.shuffle(indices)
-    batches = split_array(indices, batch_size)
-    bytes_total = 0                 # TODO
-    st = time.perf_counter()        # TODO
-    for batch_idx, batch in enumerate(batches): 
-      tasks = [self.getitem_info(i) for i in batch]
-      ret_data = pool.starmap(readdata, tasks)
-
-      # Benchmark the retrival rate
-      for ret in ret_data: 
-        bytes_total += ret.nbytes               # TODO
-      print(f"Batch {batch_idx+1:5d}/{len(batches)}: Retrival speed: {bytes_total / 1024 / 1024 / (time.perf_counter() - st):6.2f} MB/s. Time: {(time.perf_counter() - st)/(batch_idx+1):6.2f} seconds")     # 
-      
-      tasks = [(ret, self.target_np) for ret in ret_data]
-      ret_data = pool.starmap(padding, tasks)
-
-      data_numpy = np.zeros((len(ret_data), self.target_np, 3), dtype=np.float32)
-      for i, ret in enumerate(ret_data):
-        data_numpy[i, ...] = ret
-
-      tasks = [(self.hdffiles[self.idx_to_file[i]], self.idx_to_position[i]) for i in batch]
-      labels = pool.starmap(readlabel, tasks)
-      label_numpy = np.array(labels, dtype=np.int64)
-
-      data = torch.from_numpy(data_numpy)
-      label = torch.from_numpy(label_numpy)
+    for data, label in super().mini_batches(batch_size=batch_size, shuffle=shuffle, process_nr=process_nr):
+      data = self.padding_batch(data)
       yield data, label
 
-  def getitem_info(self, index):
-    if index >= self.total_entries:
-      raise IndexError(f"Index {index} is out of range. The dataset has {self.total_entries} entries.")
-    file_idx = self.idx_to_file[index]
-    vert_start = self.idx_to_vert_start[index]
-    vert_end = self.idx_to_vert_end[index]
-    h5filename = self.hdffiles[file_idx]
+  def mini_batch_task(self, index):
+    start_idx = self.get_start(index)
+    end_idx = self.get_end(index)
+    if (end_idx - start_idx > self.target_np) and self.do_padding:
+      # print("doing batch padding", self.do_padding)
+      # Randomly select target_np points
+      _rand = np.arange(start_idx, end_idx, dtype=np.uint64)
+      np.random.shuffle(_rand)
+      nr_query = int(min(self.target_np*1.05, end_idx - start_idx))
+      _rand = _rand[:nr_query]  # NOTE: Increase a bit because the source vertices might have zero points
+      _rand.sort()
+      theslice = np.s_[_rand]
+    else: 
+      # No padding for visualization
+      theslice = np.s_[start_idx:end_idx]
+    return (self.get_file(index), "vertices", theslice)
 
-    ret_info = (h5filename, "vertices", vert_start, vert_end)
-    return ret_info
-
-  def getitem_label(self, index):
-    position = self.idx_to_position[index]
-    with io.hdffile(self.hdffiles[0], "r") as h5file:
-      label = h5file["label"][position]
-    return label
+  def padding_batch(self, batch):
+    ret_points = np.zeros((batch.shape[0], self.target_np, batch.shape[2]), dtype=np.float32)
+    batch = batch.numpy()
+    ret_point_rand = np.arange(self.target_np)
+    np.random.shuffle(ret_point_rand)
+    for idx, entry in enumerate(batch):
+      # Mask the points at origin point, move to the origin and then do the padding
+      mask = np.count_nonzero(entry, axis=1).astype(bool)
+      entry = entry[mask]
+      lower_boundi = np.min(entry, axis=0)
+      entry -= lower_boundi
+      np.random.shuffle(entry)
+      ret_points[idx][ret_point_rand[:min(self.target_np, entry.shape[0])], :] = entry[:min(self.target_np, entry.shape[0]), :]
+    ret_points = torch.from_numpy(ret_points)
+    # print(">>>> ", ret_points.shape, " size ", ret_points.nbytes/1024/1024/1024, " GB")
+    return ret_points
 
   def padding(self, points):
     # Mask point at 0,0,0
@@ -428,125 +379,92 @@ class SurfDataset(data.Dataset):
       points = points[choices]
     return points
 
-
-  def viewvert(self, index):
+  ################### ?????????? ###################
+  def view_verts(self, index):
     import open3d as o3d
     points, _ = self.__getitem__(index)
-    points = points[0].numpy()
-    # count number of points at 0,0,0
-
+    points = points.numpy()
+    # Count number of points at 0,0,0
+    zero_nr = np.count_nonzero(points, axis=1)
+    print(points.shape)
+    zero_point_nr = np.count_nonzero(~np.count_nonzero(points, axis=1).astype(bool))
+    print(f"Number of points at 0,0,0: {zero_point_nr}")
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points)
     o3d.visualization.draw_geometries([pcd])
 
-  def __len__(self):
-    return self.total_entries
+  def view_verts2(self, index):
+    import open3d as o3d
+    points, _ = next(self.mini_batches(batch_size=1, shuffle=True, process_nr=1))
+    points = points.numpy()[0]
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+    o3d.visualization.draw_geometries([pcd])
 
+  def get_surf(self, index): 
+    # make map for the faces
+    st = time.perf_counter()
+    filename = self.get_file(index)
+    position = self.get_position(index)
+    with io.hdffile(filename, "r") as hdf: 
+      vert_sti = hdf["vert_starts"][position]
+      vert_end = hdf["vert_ends"][position]
+      face_sti = hdf["face_starts"][position]
+      face_end = hdf["face_ends"][position]
+      vert = hdf["vertices"][vert_sti:vert_end]
+      face = hdf["faces"][face_sti:face_end]
+    surf = o3d.geometry.TriangleMesh()
+    surf.vertices = o3d.utility.Vector3dVector(vert)
+    surf.triangles = o3d.utility.Vector3iVector(face)
+    surf.compute_vertex_normals()
+    surf.paint_uniform_color([0.5, 0.5, 0.5])
+    print(f"The surface {index}/{len(self)} has {len(vert)} vertices and {len(face)} faces., time: {time.perf_counter() - st:8.2f}")
 
-class BaseDataset(data.Dataset): 
-  def __init__(self, hdffiles: list): 
-    # Initialize the hdffiles and general information
-    self.hdffiles = []
-    self.total_entries = 0
-    # Prepare the map size for the dataset
-    for file in hdffiles:
-      self.hdffiles.append(file)
-      with io.hdffile(file, "r") as h5file:
-        self.total_entries += h5file["label"].shape[0]
-
-    # Initial behaviors
-    with io.hdffile(hdffiles[0], "r") as h5file:
-      h5file.draw_structure()
-  
-  def __len__(self):
-    return self.total_entries
+    return surf
 
     
 class HilbertCurveDataset(BaseDataset):
   def __init__(self, hdffiles: list):
     super().__init__(hdffiles)
-    # Generate the map for __getitem__ method to correctly slice the data from a set of HDF5 files
-    self.idx_to_file = np.zeros(self.total_entries, dtype=np.uint8)
-    self.idx_to_position = np.zeros(self.total_entries, dtype=np.uint64)
-    self.idx_to_slice_start = np.zeros(self.total_entries, dtype=np.uint64)
-    self.idx_to_slice_end = np.zeros(self.total_entries, dtype=np.uint64)
-    memsize = self.idx_to_file.nbytes + self.idx_to_position.nbytes + self.idx_to_slice_start.nbytes + self.idx_to_slice_end.nbytes
-    print(f"The maps of the {self.total_entries} entries occupies {memsize / 1024 / 1024:6.2f} MB or {memsize / 1024 / 1024 / 1024:6.2f} GB.")
-
     global_ind = 0
     for fidx, file in enumerate(self.hdffiles):
       with io.hdffile(file, "r") as h5file:
         entry_nr_i = h5file["label"].shape[0]
-        self.idx_to_file[global_ind:global_ind + entry_nr_i] = fidx
-        self.idx_to_position[global_ind:global_ind + entry_nr_i] = np.arange(entry_nr_i)
-        self.idx_to_slice_start[global_ind:global_ind + entry_nr_i] = np.arange(entry_nr_i) 
-        self.idx_to_slice_end[global_ind:global_ind + entry_nr_i] = np.arange(entry_nr_i) + 1
+        self.file_map[global_ind:global_ind + entry_nr_i] = fidx
+        self.position_map[global_ind:global_ind + entry_nr_i] = np.arange(entry_nr_i)
+        self.start_map[global_ind:global_ind + entry_nr_i] = np.arange(entry_nr_i) 
+        self.end_map[global_ind:global_ind + entry_nr_i] = np.arange(entry_nr_i) + 1
         global_ind += entry_nr_i
 
   def __getitem__(self, index):
-    fileidx = self.idx_to_file[index]
-    position = self.idx_to_position[index]
-    start_pos = self.idx_to_slice_start[index]
-    end_pos = self.idx_to_slice_end[index]
-    fname = self.hdffiles[fileidx]
-    with io.hdffile(fname, "r") as h5file:
-      data = h5file["voxel"][start_pos:end_pos]
-      label = h5file["label"][position]
-      data = np.asarray(data, dtype=np.float32)
-      label = np.array(label, dtype=np.int64)
+    data = readdata(*self.mini_batch_task(index))
+    label = readlabel(self.get_file(index), self.get_position(index))
+    data = np.array(data, dtype=np.float32)
+    label = np.array(label, dtype=np.int64)
     data = torch.from_numpy(data)
     label = torch.from_numpy(label)
     return data, label
 
-  def __del__(self):
-    self.idx_to_file.resize(0)
-    self.idx_to_position.resize(0)
-
-  def getitem_info(self, index):
-    fileidx = self.idx_to_file[index]
-    position = self.idx_to_position[index]
-    start_pos = self.idx_to_slice_start[index]
-    end_pos = self.idx_to_slice_end[index]
-    fname = self.hdffiles[fileidx]
-    return (fname, "voxel", start_pos, end_pos)
-
-  def mini_batches(self, batch_size=512, shuffle=True, process_nr=24):
-    pool = mp.Pool(process_nr)
-    indices = np.arange(self.total_entries)
-    if shuffle:
-      np.random.shuffle(indices)
-    batches = split_array(indices, batch_size)
-    for batch_idx, batch in enumerate(batches): 
-      tasks = [self.getitem_info(i) for i in batch]
-      ret_data = pool.starmap(readdata, tasks)
-      data_numpy = np.zeros((len(ret_data), 128, 128), dtype=np.float32)
-      for i, ret in enumerate(ret_data):
-        data_numpy[i, ...] = ret
-      data_numpy = data_numpy[:, np.newaxis, ...]
-
-      tasks = [(self.hdffiles[self.idx_to_file[i]], self.idx_to_position[i]) for i in batch]
-      labels = pool.starmap(readlabel, tasks)
-      label_numpy = np.array(labels, dtype=np.int64)
-
-      data = torch.from_numpy(data_numpy)
-      label = torch.from_numpy(label_numpy)
-      yield data, label
+  def mini_batch_task(self, index):
+    return (self.get_file(index), "voxel", np.s_[self.get_start(index):self.get_end(index)])
 
 
+# Coord Dataset
+# T5  : Estimated Time:   466.46 seconds or     7.77 minutes
+# SSD : Estimated Time:   467.22 seconds or     7.79 minutes
+# No acceleration in SSD
 
-# class SurfLoader(data.DataLoader):
-#   def __init__(self, dataset, batch_size=256, shuffle=False, *args, **kwargs):
-#     super().__init__(dataset, batch_size, shuffle, *args, **kwargs)
-#     # self.dataset = dataset
-#     import multiprocessing as mp
-#     self.pool = mp.Pool(8)
+# Hilbert Curve Dataset
+# T5  : Estimated Time: 19104.34 seconds or   318.41 minutes
+# SSD : Estimated Time:  2662.34 seconds or    44.37 minutes
+# 7.1 fold acceleration in SSD 
 
-#   def __iter__(self):
-#     # Custom batch retrieval logic goes here
-#     # For now, this just mimics the standard DataLoader's batch retrieval
-#     for batch in super().__iter__():
-#       # You can modify the batch here if needed
-#       ret_data = self.pool.starmap(self.dataset.real_getitem, [(int(i),) for i in batch])
-#       print(ret_data)
-#       yield batch
+# Surface Dataset
+# T5  : Estimated Time: 16574.94 seconds or   276.25 minutes
+# SSD : Estimated Time:  2656.86 seconds or    44.28 minutes
+# 6.2 fold acceleration
 
+# Voxel Dataset
+# T5  : Estimated Time: 50537.85 seconds or   842.30 minutes
+# SSD : Estimated Time:  4510.17 seconds or    75.17 minutes
+# 11 fold acceleration in SSD

@@ -1,6 +1,19 @@
-import os
+import os, argparse
+
+import numpy as np
 from numpy import ndarray, unique
+from torch import Tensor
+import torch.cuda
+import torch.nn.functional as F
+import matplotlib
+# Use Agg backend for matplotlib for non-GUI environment
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
 from . import constants
+
+
+
 
 def checkfiles(file_list:str, basepath="") -> list:
   with open(file_list, 'r') as f:
@@ -18,6 +31,14 @@ def add_data_to_hdf(hdffile, dataset_name:str, data:ndarray, **kwargs):
   else:
     hdffile.append_entries(dataset_name, data)
 
+def update_hdf_by_slice(hdffile, dataset_name:str, data:ndarray, hdf_slice, **kwargs):
+  if dataset_name not in hdffile.keys():
+    hdffile.create_dataset(dataset_name, data=data, **kwargs)
+  else:
+    if hdf_slice.stop > hdffile[dataset_name].shape[0]: 
+      hdffile[dataset_name].resize(hdf_slice.stop, axis=0)
+    hdffile[dataset_name][hdf_slice] = data
+
 
 def h5files_to_dataloader(filelist:list):
   pass
@@ -31,6 +52,27 @@ def report_accuracy(pred, label, verbose=True):
     print(f"Accuracy: {accuracy}")
   return accuracy
 
+def validation(classifier, valid_data, valid_label, usecuda=True, batch_size=256, process_nr=32):
+  print(">>> Start validation...")
+  classifier.eval()
+  # valid_data, valid_label = next(dataset.mini_batches(batch_size=batch_size, process_nr=process_nr))
+  if usecuda:
+    valid_data, valid_label = valid_data.cuda(), valid_label.cuda()
+  ret = classifier(valid_data)
+
+  if isinstance(ret, Tensor):
+    # Default model which returns the predicted results
+    pred_choice = ret
+  elif isinstance(ret, tuple):
+    # Customized model which returns a tuple rather than the predicted results
+    pred_choice = ret[0]
+  else:
+    raise ValueError(f"Unexpected return type {type(ret)}")
+  loss = F.cross_entropy(pred_choice, valid_label)
+  accuracy = report_accuracy(pred_choice, valid_label, verbose=False)
+  print(f">>> Validation loss: {loss.item():8.4f} | Validation accuracy: {accuracy:8.4f}")
+  return loss, accuracy
+
 
 def confusion_matrix(predictions, labels, output_file="confusion_matrix.png"):
   """
@@ -41,9 +83,7 @@ def confusion_matrix(predictions, labels, output_file="confusion_matrix.png"):
   Returns:
     Save to figure file
   """
-  import numpy as np
-  import matplotlib.pyplot as plt
-  from . import constants
+
 
   nr_classes = 20
   conf_mat = np.zeros((nr_classes, nr_classes), dtype=np.int32)
@@ -102,3 +142,43 @@ def label_counts(train_label):
   print("\n", end="")
 
 
+def standard_parser(parser: argparse.ArgumentParser):
+  # Data files
+  parser.add_argument("-train", "--training_data", type=str, help="The file writes all of the absolute path of h5 files of training data set")
+  parser.add_argument("-valid", "--validation_data", type=str, help="The file writes all of the absolute path of h5 files of validation data set")
+  parser.add_argument("-test", "--test_data", type=str, help="The file writes all of the absolute path of h5 files of test data set")
+  parser.add_argument("-o", "--output_folder", type=str, default="cls", help="Output folder")
+  
+  # Pretrained model and break point restart
+  parser.add_argument("--pretrained", type=str, default=None, help="Pretrained model path")
+  parser.add_argument("--start_epoch", type=int, default=0, help="Start epoch")
+
+  # Training parameters
+  parser.add_argument("-b", "--batch_size", type=int, default=1024, help="Batch size")
+  parser.add_argument("-e", "--epochs", type=int, default=1, help="Number of epochs")
+  parser.add_argument("-lr", "--learning_rate", type=float, default=0.001, help="Learning rate")
+  parser.add_argument("-itv", "--interval", type=int, default=50, help="How many batches to wait before logging training status")
+
+  # Other parameters
+  parser.add_argument("-v", "--verbose", default=0, type=int, help="Verbose printing while training")
+  parser.add_argument("--data_workers", type=int, default=4, help="Number of workers for data loading")
+  parser.add_argument("--manualSeed", type=int, help="Manually set seed")
+  return parser
+
+
+def parser_sanity_check(parser: argparse.ArgumentParser):
+  args = parser.parse_args()
+  if (not args.training_data) or (not os.path.exists(args.training_data)):
+    parser.print_help()
+    raise ValueError(f"The training data file {args.training_data} does not exist.")
+  if (not args.validation_data) or (not os.path.exists(args.validation_data)):
+    parser.print_help()
+    raise ValueError(f"The validation data file {args.validation_data} does not exist.")
+  if (not args.test_data) or (not os.path.exists(args.test_data)):
+    parser.print_help()
+    raise ValueError(f"The test data file {args.test_data} does not exist.")
+  if (not args.output_folder) or (not os.path.exists(args.output_folder)):
+    parser.print_help()
+    raise ValueError(f"The output folder {args.output_folder} does not exist.")
+  print(">>> Passed the sanity check of the parser.")
+  return args

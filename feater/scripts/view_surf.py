@@ -8,8 +8,8 @@ from siesta.scripts import view_obj
 
 
 def get_coordi(hdf, index:int) -> np.ndarray:
-  coord_sti = hdf["coord_start"][index]
-  coord_end = hdf["coord_end"][index]
+  coord_sti = hdf["xyzr_starts"][index]
+  coord_end = hdf["xyzr_ends"][index]
   coordi = hdf["xyzr"][coord_sti:coord_end]
 
   ret = []
@@ -23,10 +23,10 @@ def get_coordi(hdf, index:int) -> np.ndarray:
   return ret
 
 def get_surfi(hdf, index:int) -> np.ndarray:
-  vert_sti = hdf["vert_start"][index]
-  vert_end = hdf["vert_end"][index]
-  face_sti = hdf["face_start"][index]
-  face_end = hdf["face_end"][index]
+  vert_sti = hdf["vert_starts"][index]
+  vert_end = hdf["vert_ends"][index]
+  face_sti = hdf["face_starts"][index]
+  face_end = hdf["face_ends"][index]
   vert = hdf["vertices"][vert_sti:vert_end]
   face = hdf["faces"][face_sti:face_end]
   surf = o3d.geometry.TriangleMesh()

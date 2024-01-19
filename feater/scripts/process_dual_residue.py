@@ -6,7 +6,7 @@ import numpy as np
 
 # import feater
 from feater.scripts import fix_residue
-from feater import utils
+from feater import utils, constants
 
 
 def parser_run_pdbprocess():
@@ -61,6 +61,9 @@ def process_file_dual(complex_file: str, settings: dict):
     crd_res2 = coord[res2.first_atom_index:res2.last_atom_index, :]
     atomc = top_res1.select("@C")
     atomn = top_res2.select("@N")
+    if (res1.name not in constants.RES) or (res2.name not in constants.RES):
+      print(f"Residue pair {res1.name}-{res2.name} is not supported yet", file=sys.stderr)
+      continue
 
     if len(atomc) == 0 or len(atomn) == 0:
       continue
@@ -90,9 +93,6 @@ def process_file_dual(complex_file: str, settings: dict):
             r2name = "HID"
           else:
             r2name = res2.name
-          if (r1name not in config.RES) or (r2name not in config.RES):
-            print(f"Residue pair {r1name}-{r2name} is not supported yet", file=sys.stderr)
-            continue
           tempf.write(f"{r1name}_N\n")
           tempf.write(f"{r2name}_C\n")
           tempf.write("END\n")
@@ -115,60 +115,33 @@ def process_file_dual(complex_file: str, settings: dict):
           shutil.copy2(f"{tmp_prefix}.pdb", f"{output_prefix}.pdb")
   print(f"Finished the processing of the PDB file: {complex_file}; Time elapsed: {(time.perf_counter() - st):.2f} seconds")
 
-def do_prod(complex_files: list, args: dict):
-  # Initialize the thread pool
-  thread_pool = mp.Pool(args["thread_number"])
-
-  # Preare the tasks for the thread pool
-  batch_size = 100
-  batch_number = (len(complex_files) + batch_size) // batch_size
-  pdbsplits = np.array_split(complex_files, batch_number)
-  # print(f"There are {len(pdbsplits)} batches to process")
-
-  for i, pdblist in enumerate(pdbsplits):
-    print(f"Processing the {i+1:4d}/{len(pdbsplits):<4d} batch containing {len(pdblist):4d} complexes")
-    tasks = [(pdb, args) for pdb in pdblist]
-    thread_pool.starmap(process_file_dual, tasks)
-
-  # for f in pdbsplits[0][:10]:
-  #   process_file_dual(f, args)
-  # process_file_dual(pdbsplits[0][:10], args) # TODO: Remove this line for production
-  print(f"Finished the dual residue processing of {len(complex_files)} complexes")
-  thread_pool.close()
-  thread_pool.join()
-
 
 def do_prod_slurm(complex_files: list, args: dict):
-  # Initialize the thread pool
+  # Retrieve the list of complexes to process based on the array task index
+  files_todo = np.array_split(complex_files, args["node_number"])[args["node_index"]]
+  print(complex_files)
+  print(files_todo)
+  print("#"*80)
+  print(f"Node index: {args['node_index']}/{args['node_number']}")
+  print(f"This task is process: {len(files_todo)}/{len(complex_files)} complexes")
+
+  
+  # Initialize the thread pool and prepare the tasks for the thread pool
   thread_pool = mp.Pool(args["thread_number"])
-  print(f"Node index: {args['node_index']}, Node number: {args['node_number']}")
-  print(f"Original number of complexes: {len(complex_files)}")
-  complex_files = np.array_split(complex_files, args["node_number"])[args["node_index"]]
-  print(f"Number of complexes to process: {len(complex_files)} in this node")
+  tasks = [(pdb, args) for pdb in files_todo]
+  thread_pool.starmap(process_file_dual, tasks)
 
-  # Preare the tasks for the thread pool
-  batch_size = 100
-  batch_number = (len(complex_files) + batch_size) // batch_size
-  pdbsplits = np.array_split(complex_files, batch_number)
-  # print(f"There are {len(pdbsplits)} batches to process")
-
-  for i, pdblist in enumerate(pdbsplits):
-    print(f"Processing the {i+1:4d}/{len(pdbsplits):<4d} batch containing {len(pdblist):4d} complexes")
-    tasks = [(pdb, args) for pdb in pdblist]
-    thread_pool.starmap(process_file_dual, tasks)
-
-  print(f"Finished the dual residue processing of {len(complex_files)} complexes")
-
+  print(f"Finished the dual residue processing of {len(files_todo)} complexes")
+  print("^"*80)
   thread_pool.close()
   thread_pool.join()
 
 
 def run_pdbprocess():
   args = parser_run_pdbprocess()
-  settings = json.dumps(vars(args))
+  settings = json.dumps(vars(args), indent=2)
   print("Settings: ", settings)
-  COMPLEX_LIST = args.input
-  complex_list = utils.checkfiles(COMPLEX_LIST)[:500]    # TODO: Remove the [:500] for production
+  complex_list = utils.checkfiles(args.input)  #[:50]    # TODO: Remove the slice for production
   print("Total number of complexes: ", len(complex_list))
   do_prod_slurm(complex_list, vars(args))
 
@@ -176,6 +149,3 @@ def run_pdbprocess():
 
 if __name__ == "__main__":
   run_pdbprocess()
-
-
-

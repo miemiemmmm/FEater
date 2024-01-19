@@ -75,38 +75,8 @@ def get_geo_coordi(coordi) -> list:
     ret.append(sphere)
   return ret
 
-
-def add_bounding_box(dims):  # TODO: Already put this to the SiESTA
-  boxpoints = np.array([
-    [0,0,0],
-    [dims[0],0,0],
-    [0, dims[1], 0],
-    [0,0,dims[2]],
-    [dims[0], dims[1], 0],
-    [dims[0], 0, dims[2]],
-    [0, dims[1], dims[2]],
-    [dims[0], dims[1], dims[2]],
-  ])
-  lines = [
-    [0,1], [0,2], [0,3], [1,4],
-    [1,5], [2,4], [2,6], [3,5],
-    [3,6], [4,7], [5,7], [6,7],
-  ]
-  ret = []
-  for line in lines:
-    cylinder = view_obj.create_cylinder(boxpoints[line[0]], boxpoints[line[1]], radius=0.1, color=[0,0,1])
-    ret.append(cylinder)
-  print(len(ret))
-  for geo in ret:
-    print(geo)
-    geo.compute_vertex_normals()
-  return ret
-
-
-def main_render(inputfile:str, index:int, args):
+def get_info_coordi(inputfile:str, index:int) -> tuple:
   with io.hdffile(inputfile, "r") as hdf:
-    hdf.draw_structure()
-
     if KEY_COORD not in hdf:
       raise ValueError("Cannot find the coordinates in the HDF file")
     elif KEY_COORD_START_MAP not in hdf or KEY_COORD_END_MAP not in hdf:
@@ -114,31 +84,139 @@ def main_render(inputfile:str, index:int, args):
     if index >= hdf["label"].shape[0]:
       raise ValueError(f"Index {index} is out of range")
     
-    coordi = get_coordi(hdf, index) 
+    coordi = get_coordi(hdf, index)
     coord_cog = np.mean(coordi, axis=0)
-
-    # Get the bounding box as the dims and adding a padding of 1 on each side
     dims = np.max(coordi, axis=0) - np.min(coordi, axis=0) + 2
     diff = coord_cog - (dims/2)
+    coordi -= diff 
     colors = get_elemi(hdf, index)
-    
+    return coordi, colors, dims
+
+
+def index_parser(index:str) -> list: 
+  if index.startswith("list"):
+    indices = index.split("(")[1].split(")")[0].split(",")
+  elif index.startswith("arange"): 
+    indices = index.split("(")[1].split(")")[0].split(",")
+    indices = np.arange(*(int(i) for i in indices))
+  elif index.startswith("linspace"):
+    indices = index.split("(")[1].split(")")[0].split(",")
+    indices = np.linspace(*(int(i) for i in indices)).astype(int)
+  elif index.startswith("random"):
+    indices = index.split("(")[1].split(")")[0].split(",")
+    indices = np.random.randint(int(indices[0]), int(indices[1]), size=int(indices[2]))
+  else:
+    raise ValueError(f"Index {index} is not supported")
+  if len(indices) == 0:
+    print("Unsuccessful parsing the index string")
+    print("Please use the following format:")
+    print("-> list(1,2,3,4,5)")
+    print("-> arange(1,10,2)")
+    print("-> linspace(1,10,5)")
+    print("-> random(1,10,5)")
+    raise ValueError(f"Index parsing error: {index}")
+  indices = np.array(indices, dtype=int)
+  indices.sort()
+  print(indices)
+  return indices
+
+def main_render_2(inputfile:str, index:str, args):
+  if args.topology is None: 
+    raise ValueError("Topology needs to be specified when using index list")
+  indices = index_parser(index)
 
   # Main rendering functions
   vis = o3d.visualization.Visualizer()
-  vis.create_window(window_name="HDF Coordinate viewer", width=1500, height=1000)
+  vis.create_window(window_name="HDF Coordinate viewer", width=1500, height=1500)
+  
+  # Build the trajectory object
+  from pytraj import load, Trajectory, Frame
+  # TODO think about how to deal with the topology
+  with io.hdffile(inputfile, "r") as hdf:
+    # hdf.draw_structure()
+    # Only considering the first topology 
+    top_key = hdf["topology_key"][indices[0]].decode("utf-8")
+    top = hdf.get_top(top_key)
+  
+  coord_final = np.zeros((len(indices), top.n_atoms, 3), dtype=np.float64)
+  traj  = Trajectory()
+  geoms_final = []
+  for idx, h5index in enumerate(indices):
+    coordi, colors, dims = get_info_coordi(inputfile, h5index)
+    coord_final[idx] = coordi
+    # with io.hdffile(inputfile, "r") as hdf:
+    #   top_key = hdf["topology_key"][h5index].decode("utf-8")
+    #   top = hdf.get_top(top_key)
+    # traj  = Trajectory(top=top, xyz=np.array([coordi]))
+  
+  traj = Trajectory(top=top, xyz=coord_final)
+  traj.superpose(mask="@CA,C,N")
+  for idx in range(len(traj)):
+    coord = traj.xyz[idx]
+    tmp_traj = Trajectory(top=top, xyz=np.array([coord]))
+    geoms_coord = view_obj.traj_to_o3d(tmp_traj)
+    geoms_final += geoms_coord
 
-  if args.top is not None:
-    if not os.path.exists(args.top):
-      raise ValueError(f"Topology file {args.top} does not exist")
-    from pytraj import load, Trajectory
-    traj = Trajectory(top=load(args.top).top, xyz=np.array([coordi - diff]))
+  # Add all of the geometries to the viewer
+  for geom in geoms_final:
+    vis.add_geometry(geom)
+
+  # Add the bounding box
+  if args.box:
+    geoms_box = view_obj.create_bounding_box(dims)
+    for geo in geoms_box:
+      vis.add_geometry(geo)
+
+  # Mark the center of the voxel
+  if args.markcenter:
+    sphere = o3d.geometry.TriangleMesh.create_sphere(radius=1)
+    sphere.translate(np.asarray(dims)/2)
+    sphere.paint_uniform_color([0, 1, 0])
+    vis.add_geometry(sphere)
+
+  if args.render_json != "":
+    vis.get_render_option().load_from_json(args.render_json)
+  vis.poll_events()
+  vis.update_renderer()
+  if args.stuck:
+    vis.run()
+  else:
+    time.sleep(0.1)
+  out_prefix = os.path.basename(inputfile).split(".")[0] + "_" + index.replace("(","_").replace(")","")
+  print(f"Saving the image to {out_prefix}.png")
+  vis.capture_screen_image(f"{out_prefix}.png", True)
+  vis.capture_depth_image(f"{out_prefix}_depth.png", True)
+  vis.destroy_window()
+  
+
+
+def main_render(inputfile:str, index:int, args):    
+  # Main rendering functions
+  vis = o3d.visualization.Visualizer()
+  vis.create_window(window_name="HDF Coordinate viewer", width=1500, height=1500)
+
+  if args.topology:
+    if not os.path.exists(args.topology):
+      raise ValueError(f"Topology file {args.topology} does not exist")
+    from pytraj import load, Trajectory   # TODO 
+    coordi, colors, dims = get_info_coordi(inputfile, index)
+    with io.hdffile(inputfile, "r") as hdf:
+      # hdf.draw_structure()
+      if "topology_key" not in hdf:
+        raise ValueError("Cannot find the topology key in the HDF file")
+      top_key = hdf["topology_key"][index].decode("utf-8")
+      if top_key not in hdf.keys():
+        raise ValueError(f"Cannot find the topology {top_key} in the HDF file")
+      top = hdf.get_top(top_key)
+      print(f"Res topology {top_key}, start{hdf['coord_starts'][index]}, end{hdf['coord_ends'][index]}")
+    traj = Trajectory(top=top, xyz=np.array([coordi]))
     geoms_coord = view_obj.traj_to_o3d(traj)
     for geom in geoms_coord:
       vis.add_geometry(geom)
     
-    
   else: 
-    geoms_coord = get_geo_coordi(coordi - diff)
+    coordi, colors, dims = get_info_coordi(inputfile, index)
+    geoms_coord = get_geo_coordi(coordi)
     for geo, color in zip(geoms_coord, colors):
       geo.paint_uniform_color(color)
       geo.compute_vertex_normals()
@@ -167,19 +245,22 @@ def main_render(inputfile:str, index:int, args):
     time.sleep(0.1)
   out_prefix = os.path.basename(inputfile).split(".")[0]+f"{index:04d}"
   print(f"Saving the image to {out_prefix}.png")
-  vis.capture_screen_image(f"{out_prefix}.png", True)
-  vis.capture_depth_image(f"{out_prefix}_depth.png", True)
+  if args.save_fig:
+    vis.capture_screen_image(f"{out_prefix}.png", True)
+    vis.capture_depth_image(f"{out_prefix}_depth.png", True)
   vis.destroy_window()
 
 def parse_args():
   parser = argparse.ArgumentParser()
   parser.add_argument("-f", "--fileinput", type=str, help="The input HDF5 file")
   parser.add_argument("-i", "--index", type=int, default=0, help="The index of the molecule to be viewed")
+  parser.add_argument("-l", "--index_list", type=str, default="", help="The list of indices to be viewed")
   parser.add_argument("-b", "--box", type=int, default=1, help="Add the bounding box. Default: 1")
   parser.add_argument("-m", "--markcenter", default=1, type=int, help="Mark the center of the voxel (Marked by a green sphere). Default: 1")
   parser.add_argument("-r", "--render_json", type=str, default="", help="The camera settings")
-  parser.add_argument("--top", type=str, help="The topology file (optional)")
-  parser.add_argument("--stuck", type=int, default=1, help="Stuck the viewer. Default: 0")
+  parser.add_argument("-t", "--topology", type=int, default=0, help="The topology file (optional)")
+  parser.add_argument("-s", "--save_fig", type=int, default=0, help="Save the figure. Default: 0")
+  parser.add_argument("--stuck", type=int, default=1, help="Stuck the viewer. Default: 1")
   args = parser.parse_args()
   if args.fileinput is None:
     raise ValueError("Input file is not specified")
@@ -191,11 +272,15 @@ def parse_args():
 def console_interface():
   args = parse_args()
   print(json.dumps(vars(args), indent=2))
-  main_render(args.fileinput, args.index, args)
+  if args.index_list != "":
+    main_render_2(args.fileinput, args.index_list, args)
+  else: 
+    main_render(args.fileinput, args.index, args)
 
 if __name__ == "__main__":
   console_interface()
 
 
 # python /MieT5/MyRepos/FEater/feater/scripts/view_coord.py -f /media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_${res}.h5 --top /media/yzhang/MieT72/Data/feater_database_coord/Topology_${res}.pdb -c ScreenCamera.json -i ${i} -m 0 -b 0
-# python /MieT5/MyRepos/FEater/feater/scripts/view_coord.py -f /media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_ASN.h5 -i 250 -m 0 --top /media/yzhang/MieT72/Data/feater_database_coord/Topology_ASN.pdb  -b 0
+# python /MieT5/MyRepos/FEater/feater/scripts/view_coord.py -f /media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_ASN.h5 \
+# --top /media/yzhang/MieT72/Data/feater_database_coord/Topology_ASN.pdb  -b 0 -i 250 -m 0 

@@ -1,190 +1,213 @@
 import os, argparse, sys, time
 
 import numpy as np
+import multiprocessing as mp
 from pytraj import load as ptload
-from feater import RES2LAB, io, utils
+from feater import RES2LAB, io, utils, constants
 import siesta
 
 
-def mol_to_surf(molfile:str,spacing=0.35,smooth_step=1,slice_number=300,**kwargs):
-  thexyzr = siesta.pdb_to_xyzr(molfile)
-  verts, faces = siesta.xyzr_to_surf(thexyzr,
-                                     grid_size=spacing,
-                                     slice_number=slice_number,
-                                     smooth_step=smooth_step)
+# std::map<char, float> radiusDic = {
+#   {'O', 1.52f}, {'C', 1.70f}, {'N', 1.55f},
+#   {'H', 1.20f}, {'S', 1.80f}, {'P', 1.80f},
+#   {'X', 1.40f}
+# };
+
+mass_to_rad_map = {
+  16: 1.52, 
+  12: 1.70, 
+  14: 1.55, 
+  1: 1.20, 
+  32: 1.80, 
+  31: 1.80, 
+  0: 1.40
+}
+
+# @profile
+def coord_to_surf(hdffile, idx, settings):
+  spacing = float(settings["grid_spacing"])
+  smooth_step = int(settings["smooth_step"])
+  slice_number = int(settings["slice_number"])
+
+  with io.hdffile(hdffile, "r") as f:
+    st_idx = f["coord_starts"][idx]
+    end_idx = f["coord_ends"][idx]
+    coord = f["coordinates"][st_idx:end_idx]
+    coord = np.array(coord, dtype=np.float32)
+    elems = f["elements"][st_idx:end_idx]
+    rads = [mass_to_rad_map[ele] for ele in elems]
+    thexyzr = np.zeros((coord.shape[0], 4), dtype=np.float32)
+    thexyzr[:, :3] = coord
+    thexyzr[:, 3] = rads
+  
+  verts, faces = siesta.xyzr_to_surf(thexyzr, grid_size=spacing, slice_number=slice_number, smooth_step=smooth_step)
   verts = np.array(verts, dtype=np.float32)
   faces = np.array(faces, dtype=np.int32)
   return verts, faces, thexyzr
 
 
 # @profile
-def make_hdf(hdf_name:str, coord_files:list, **kwargs):
-  st = time.perf_counter()
-  SurfConfig = {
-    "grid_spacing": kwargs.get("grid_spacing", 0.35),
-    "smooth_step": kwargs.get("smooth_step", 1),
-    "slice_number": kwargs.get("slice_number", 300),
-  }
-  with io.hdffile(hdf_name, 'w') as f:
-    # Surface generation parameters
-    utils.add_data_to_hdf(f, "grid_spacing", np.array([SurfConfig["grid_spacing"]], dtype=np.float32), maxshape=[1],
-                          dtype=np.float32)
-    utils.add_data_to_hdf(f, "smooth_step", np.array([SurfConfig["smooth_step"]], dtype=np.int32), maxshape=[1],
-                          dtype=np.int32)
-    utils.add_data_to_hdf(f, "slice_number", np.array([SurfConfig["slice_number"]], dtype=np.int32), maxshape=[1],
-                          dtype=np.int32)
-    # Initialize the counters/pointers/esitmated sizes
-    c = 0
-    global_start_idx_xyzr = 0
-    global_start_idx_vert = 0
-    global_start_idx_face = 0
-    output_interval = 1000
-    estimate_coord_size = 1000
-    estimate_vert_size = 4000
-    estimate_face_size = int(estimate_vert_size * 2.5)
+def make_hdf(inputhdf:str, outputhdf:str, interp_settings:dict):
+  with io.hdffile(inputhdf, "r") as f: 
+    entry_nr = f["label"].shape[0]
+    print("Processing", entry_nr, "entries")
+  # entry_nr = 5000
+  BATCH_SIZE = 500
+  BIN_NR = (entry_nr + BATCH_SIZE - 1) // BATCH_SIZE
+  NR_PROCESS = int(interp_settings.get("processes", 8))
 
-    # Initialize the buffers for different types of data
-    label_buffer = np.full((output_interval), -1, dtype=np.int32)
-    xyzr_st_buffer = np.zeros((output_interval), dtype=np.uint64)
-    xyzr_ed_buffer = np.zeros((output_interval), dtype=np.uint64)
-    vert_st_buffer = np.zeros((output_interval), dtype=np.uint64)
-    vert_ed_buffer = np.zeros((output_interval), dtype=np.uint64)
-    face_st_buffer = np.zeros((output_interval), dtype=np.uint64)
-    face_ed_buffer = np.zeros((output_interval), dtype=np.uint64)
+  
+  # Write the meta information 
+  with io.hdffile(outputhdf, "a") as f: 
+    if "grid_spacing" not in f.keys():
+      utils.add_data_to_hdf(f, "grid_spacing", np.array([interp_settings["grid_spacing"]], dtype=np.float32), maxshape=[1])
+    if "smooth_step" not in f.keys():
+      utils.add_data_to_hdf(f, "smooth_step", np.array([interp_settings["smooth_step"]], dtype=np.int32), maxshape=[1])
+    if "slice_number" not in f.keys():
+      utils.add_data_to_hdf(f, "slice_number", np.array([interp_settings["slice_number"]], dtype=np.int32), maxshape=[1])
 
-    pointer_xyzr = 0
-    pointer_vert = 0
-    pointer_face = 0
-    xyzr_buffer = np.zeros((estimate_coord_size*output_interval, 4), dtype=np.float32)
-    elems_buffer = np.zeros((estimate_coord_size*output_interval), dtype=np.int32)
-    vertex_buffer = np.zeros((estimate_vert_size*output_interval, 3), dtype=np.float32)
-    face_buffer = np.zeros((estimate_face_size*output_interval, 3), dtype=np.int32)
 
-    f.draw_structure()
-    for fidx, file in enumerate(coord_files):
-      file = os.path.abspath(file)
-      verts, faces, xyzr = mol_to_surf(file, spacing=SurfConfig["grid_spacing"], smooth_step=SurfConfig["smooth_step"], slice_number=SurfConfig["slice_number"])
-      elems = np.array(ptload(file).top.mass).round().astype(np.int32)
+  batches = np.array_split(np.arange(entry_nr), BIN_NR)
+  batches_lens = np.array([len(_b) for _b in batches])
+  batches_cumsum = np.cumsum([0] + list(batches_lens))
+  print(batches_cumsum, BIN_NR, "bins")
+  pool = mp.Pool(processes=NR_PROCESS)
+  
+  for idx, batch in enumerate(batches):
+    if idx < interp_settings["start_batch"]:
+      print(f"Skiping batch {idx+1}/{len(batches)}: {len(batch)} files")
+      continue
 
-      nr_verts = verts.shape[0]
-      nr_faces = faces.shape[0]
-      nr_xyzr = xyzr.shape[0]
-      start_xyzri = global_start_idx_xyzr
-      end_xyzri = start_xyzri + nr_xyzr
-      start_verti = global_start_idx_vert
-      end_verti = start_verti + nr_verts
-      start_facei = global_start_idx_face
-      end_facei = start_facei + nr_faces
-      global_start_idx_xyzr += nr_xyzr
-      global_start_idx_vert += nr_verts
-      global_start_idx_face += nr_faces
+    st_batch = time.perf_counter()
+    tasks = [(inputhdf, i, interp_settings) for i in batch]
+    # results = [coord_to_surf(*task) for task in tasks]
+    results = pool.starmap(coord_to_surf, tasks)
 
-      # Self adjust the estimated length of each element buffer size
-      if nr_xyzr > estimate_coord_size:
-        estimate_coord_size = int(nr_xyzr * 1.25)
-      if nr_verts > estimate_vert_size:
-        estimate_vert_size = int(nr_verts * 1.25)
-      if nr_faces > estimate_face_size:
-        estimate_face_size = int(nr_faces * 1.25)
+    len_verts = np.cumsum([0] + [_r[0].shape[0] for _r in results])
+    len_faces = np.cumsum([0] + [_r[1].shape[0] for _r in results])
+    len_xyzr =  np.cumsum([0] + [_r[2].shape[0] for _r in results])
 
-      # Get the label of the residue
-      restype = os.path.basename(file)[:3]
-      if restype not in RES2LAB.keys():
-        raise ValueError(f"Unknown residue type: {restype}")
-      labeli = RES2LAB[restype]
+    vertex_buffer = np.zeros((len_verts[-1], 3), dtype=np.float32)
+    face_buffer = np.zeros((len_faces[-1], 3), dtype=np.int32)
+    xyzr_buffer = np.zeros((len_xyzr[-1], 4), dtype=np.float32)
+    for res_i in range(len(results)):
+      vertex_buffer[np.s_[len_verts[res_i]:len_verts[res_i+1]], :] = results[res_i][0]
+      face_buffer[np.s_[len_faces[res_i]:len_faces[res_i+1]], :] = results[res_i][1]
+      xyzr_buffer[np.s_[len_xyzr[res_i]:len_xyzr[res_i+1]], :] = results[res_i][2]
 
-      current_idx = fidx % output_interval
-      label_buffer[current_idx] = labeli
-      vert_st_buffer[current_idx] = start_verti
-      vert_ed_buffer[current_idx] = end_verti
-      face_st_buffer[current_idx] = start_facei
-      face_ed_buffer[current_idx] = end_facei
-      xyzr_st_buffer[current_idx] = start_xyzri
-      xyzr_ed_buffer[current_idx] = end_xyzri
+    # np.concatenate([_r[0] for _r in results], axis=0)
+    # face_buffer = np.concatenate([_r[1] for _r in results], axis=0)
+    # xyzr_buffer = np.concatenate([_r[2] for _r in results], axis=0)
+    with io.hdffile(inputhdf, "r") as f: 
+      label_buffer = [f["label"][i] for i in batch]
+      label_buffer = np.array(label_buffer, dtype=np.int32)
+    
+    if os.path.exists(outputhdf): 
+      with io.hdffile(outputhdf, "r") as f: 
+        if "vert_ends" in f.keys():
+          idx_vert = f["vert_ends"][batches_cumsum[idx]-1]    # batch -> idx
+          # idx_vert = f["vert_ends"][-1]
+        else: 
+          idx_vert = 0
+        if "face_ends" in f.keys():
+          idx_face = f["face_ends"][batches_cumsum[idx]-1]
+          # idx_face = f["face_ends"][-1]
+        else:
+          idx_face = 0
+        if "xyzr_ends" in f.keys():
+          idx_xyzr = f["xyzr_ends"][batches_cumsum[idx]-1]
+          # idx_xyzr = f["xyzr_ends"][-1]
+        else: 
+          idx_xyzr = 0
+    else:
+      idx_vert = 0
+      idx_face = 0
+      idx_xyzr = 0
 
-      # Mask the buffers based on the pointer
-      if pointer_xyzr + nr_xyzr > xyzr_buffer.shape[0]:
-        xyzr_buffer = np.zeros((estimate_coord_size * output_interval, 4), dtype=np.float32)
-        xyzr_buffer[:pointer_xyzr] = xyzr_buffer[:pointer_xyzr]
-        elems_buffer = np.zeros((estimate_coord_size * output_interval), dtype=np.int32)
-        elems_buffer[:pointer_xyzr] = elems_buffer[:pointer_xyzr]
-      if pointer_vert + nr_verts > vertex_buffer.shape[0]:
-        vertex_buffer = np.zeros((estimate_vert_size * output_interval, 3), dtype=np.float32)
-        vertex_buffer[:pointer_vert] = vertex_buffer[:pointer_vert]
-      if pointer_face + nr_faces > face_buffer.shape[0]:
-        face_buffer = np.zeros((estimate_face_size * output_interval, 3), dtype=np.int32)
-        face_buffer[:pointer_face] = face_buffer[:pointer_face]
-      xyzr_buffer[pointer_xyzr:pointer_xyzr+nr_xyzr, :] = xyzr
-      elems_buffer[pointer_xyzr:pointer_xyzr+nr_xyzr] = elems
-      vertex_buffer[pointer_vert:pointer_vert+nr_verts, :] = verts
-      face_buffer[pointer_face:pointer_face+nr_faces, :] = faces
-      pointer_xyzr += nr_xyzr
-      pointer_vert += nr_verts
-      pointer_face += nr_faces
+    len_verts = np.array([_r[0].shape[0] for _r in results], dtype=np.uint64)
+    len_faces = np.array([_r[1].shape[0] for _r in results], dtype=np.uint64)
+    len_xyzr = np.array([_r[2].shape[0] for _r in results], dtype=np.uint64)
 
-      c += 1
-      if (c % output_interval == 0) or (c == len(coord_files)):
-        print(f"Processed {c} files, Time elapsed: {time.perf_counter() - st:.2f} seconds")
-        label_count = np.count_nonzero(label_buffer >= 0)
-        if label_count != len(label_buffer):
-          label_buffer = label_buffer[:label_count]
-          vert_st_buffer = vert_st_buffer[:label_count]
-          vert_ed_buffer = vert_ed_buffer[:label_count]
-          face_st_buffer = face_st_buffer[:label_count]
-          face_ed_buffer = face_ed_buffer[:label_count]
-          xyzr_st_buffer = xyzr_st_buffer[:label_count]
-          xyzr_ed_buffer = xyzr_ed_buffer[:label_count]
-        xyzr_buffer = xyzr_buffer[:pointer_xyzr]
-        elems_buffer = elems_buffer[:pointer_xyzr]
-        vertex_buffer = vertex_buffer[:pointer_vert]
-        face_buffer = face_buffer[:pointer_face]
+    vert_ed_buffer = np.cumsum([_r[0].shape[0] for _r in results], dtype=np.uint64) + idx_vert
+    vert_st_buffer = vert_ed_buffer - len_verts
+    face_ed_buffer = np.cumsum([_r[1].shape[0] for _r in results], dtype=np.uint64) + idx_face
+    face_st_buffer = face_ed_buffer - len_faces
+    xyzr_ed_buffer = np.cumsum([_r[2].shape[0] for _r in results], dtype=np.uint64) + idx_xyzr
+    xyzr_st_buffer = xyzr_ed_buffer - len_xyzr
 
-        utils.add_data_to_hdf(f, "xyzr", xyzr_buffer, dtype=np.float32, maxshape=[None, 4], compression="gzip", compression_opts=1)
-        utils.add_data_to_hdf(f, "vertices", vertex_buffer, dtype=np.float32, maxshape=[None, 3], compression="gzip", compression_opts=1)
-        utils.add_data_to_hdf(f, "faces", face_buffer, dtype=np.int32, maxshape=[None, 3], compression="gzip", compression_opts=1)
-        utils.add_data_to_hdf(f, "label", label_buffer, dtype=np.int32, maxshape=[None])
-        utils.add_data_to_hdf(f, "coord_starts", xyzr_st_buffer, dtype=np.uint64, maxshape=[None])
-        utils.add_data_to_hdf(f, "coord_ends", xyzr_ed_buffer, dtype=np.uint64, maxshape=[None])
-        utils.add_data_to_hdf(f, "vert_starts", vert_st_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=1)
-        utils.add_data_to_hdf(f, "vert_ends", vert_ed_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=1)
-        utils.add_data_to_hdf(f, "face_starts", face_st_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=1)
-        utils.add_data_to_hdf(f, "face_ends", face_ed_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=1)
-        utils.add_data_to_hdf(f, "element_mass", elems_buffer, dtype=np.int32, maxshape=[None])
+    # with io.hdffile(outputhdf, "r") as f: 
+    #   print(f"Label from {batches_cumsum[idx]}, {batches_cumsum[idx]+len(batch)}")
+    #   if "vert_starts" in f.keys():
+    #     print(idx_vert, " ==== " , batches_cumsum[idx])
+    #     if idx_vert != f["vert_ends"][batches_cumsum[idx]-1]:
+    #       print(f"Mismatched vert_ends: {idx_vert} vs {f['vert_ends'][batches_cumsum[idx]-1]}")
+    #       exit(0)
+    #     else: 
+    #       print(f"Matched: {idx_vert} vs {f['vert_ends'][batches_cumsum[idx]-1]}")
+          # print(f"Put the slice to {idx_vert} -> {vert_ed_buffer[-1]}")
+          # print(f"Put the slice to {vert_st_buffer[0]} -> {vert_ed_buffer[-1]}")
+      # print("natural", f["vert_ends"].shape[0])
+      # print("analytical", batches_cumsum[idx])
+    # exit(0)
+    
+    # Prepare the slices for the HDF5 update 
+    vert_slice = np.s_[idx_vert:idx_vert+np.uint64(len(vertex_buffer))]
+    face_slice = np.s_[idx_face:idx_face+np.uint64(len(face_buffer))]
+    xyzr_slice = np.s_[idx_xyzr:idx_xyzr+np.uint64(len(xyzr_buffer))]
+    slice_labels = np.s_[batches_cumsum[idx]:batches_cumsum[idx]+len(label_buffer)]
 
-        # Reset the buffers and buffer pointers
-        label_buffer = np.full((output_interval), -1, dtype=np.int32)
-        xyzr_st_buffer = np.zeros((output_interval), dtype=np.uint64)
-        xyzr_ed_buffer = np.zeros((output_interval), dtype=np.uint64)
-        vert_st_buffer = np.zeros((output_interval), dtype=np.uint64)
-        vert_ed_buffer = np.zeros((output_interval), dtype=np.uint64)
-        face_st_buffer = np.zeros((output_interval), dtype=np.uint64)
-        face_ed_buffer = np.zeros((output_interval), dtype=np.uint64)
+    with io.hdffile(outputhdf, "a") as f:
+      print(f"Processing xyzr slice: {idx_xyzr} -> {idx_xyzr+np.uint64(len(xyzr_buffer))}")
+      
+      utils.update_hdf_by_slice(f, "xyzr", xyzr_buffer, xyzr_slice, dtype=np.float32, maxshape=[None, 4], compression="gzip", compression_opts=4)
+      utils.update_hdf_by_slice(f, "vertices", vertex_buffer, vert_slice, dtype=np.float32, maxshape=[None, 3], compression="gzip", compression_opts=4)
+      utils.update_hdf_by_slice(f, "faces", face_buffer, face_slice, dtype=np.int32, maxshape=[None, 3], compression="gzip", compression_opts=4)
+      utils.update_hdf_by_slice(f, "label", label_buffer, slice_labels, dtype=np.int32, maxshape=[None], compression="gzip", compression_opts=4)
+      utils.update_hdf_by_slice(f, "xyzr_starts", xyzr_st_buffer, slice_labels, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
+      utils.update_hdf_by_slice(f, "xyzr_ends", xyzr_ed_buffer, slice_labels, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
+      utils.update_hdf_by_slice(f, "vert_starts", vert_st_buffer, slice_labels, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
+      utils.update_hdf_by_slice(f, "vert_ends", vert_ed_buffer, slice_labels, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
+      utils.update_hdf_by_slice(f, "face_starts", face_st_buffer, slice_labels, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
+      utils.update_hdf_by_slice(f, "face_ends", face_ed_buffer, slice_labels, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
 
-        xyzr_buffer = np.zeros((estimate_coord_size*output_interval, 4), dtype=np.float32)
-        elems_buffer = np.zeros((estimate_coord_size*output_interval), dtype=np.int32)
-        vertex_buffer = np.zeros((estimate_vert_size*output_interval, 3), dtype=np.float32)
-        face_buffer = np.zeros((estimate_face_size*output_interval, 3), dtype=np.int32)
-        pointer_xyzr = 0
-        pointer_vert = 0
-        pointer_face = 0
-        st = time.perf_counter()
-    f.draw_structure()
-    print(f"Each entry has {len(f['xyzr'])/len(f['label']):.2f} atoms, {len(f['vertices'])/len(f['label']):.2f} vertices, {len(f['faces'])/len(f['label']):.2f} faces")
+      # utils.add_data_to_hdf(f, "xyzr", xyzr_buffer, dtype=np.float32, maxshape=[None, 4], compression="gzip", compression_opts=4)
+      # utils.add_data_to_hdf(f, "vertices", vertex_buffer, dtype=np.float32, maxshape=[None, 3], compression="gzip", compression_opts=4)
+      # utils.add_data_to_hdf(f, "faces", face_buffer, dtype=np.int32, maxshape=[None, 3], compression="gzip", compression_opts=4)
+      # utils.add_data_to_hdf(f, "label", label_buffer, dtype=np.int32, maxshape=[None], compression="gzip", compression_opts=4)
+      # utils.add_data_to_hdf(f, "xyzr_starts", xyzr_st_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
+      # utils.add_data_to_hdf(f, "xyzr_ends", xyzr_ed_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
+      # utils.add_data_to_hdf(f, "vert_starts", vert_st_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
+      # utils.add_data_to_hdf(f, "vert_ends", vert_ed_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
+      # utils.add_data_to_hdf(f, "face_starts", face_st_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
+      # utils.add_data_to_hdf(f, "face_ends", face_ed_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
 
+    print(f"Batch {idx+1:4d} / {len(batches):4d} ({len(batch):4d} entries) done in {(time.perf_counter() - st_batch)*1000:6.2f} us, Average speed: {(time.perf_counter() - st_batch)*1000 / len(batch):6.2f} us per entry")
+
+  pool.close()
+  pool.join()
 
 def parse_args():
   parser = argparse.ArgumentParser(description="Make HDF5")
   parser.add_argument("-i", "--input", type=str, help="The file writes all of the absolute path of coordinate files")
   parser.add_argument("-o", "--output", type=str, help="The output HDF5 file")
+  parser.add_argument("--processes", type=int, default=8, help="The number of processes")
+  parser.add_argument("--start_batch", type=int, default=0, help="The number of processes")
   args = parser.parse_args()
   return args
 
 
 def console_interface():
   args = parse_args()
-  files = utils.checkfiles(args.input)
-  print(f"Found {len(files)} files in the list")
-  make_hdf(args.output, files)
+  print(vars(args))
+  SurfConfig = {
+    "grid_spacing": 0.35,
+    "smooth_step": 1,
+    "slice_number": 300,
+    "processes": args.processes,
+    "start_batch": args.start_batch,
+  }
+
+  make_hdf(args.input, args.output, SurfConfig)
 
 
 if __name__ == "__main__":

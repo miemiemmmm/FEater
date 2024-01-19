@@ -241,7 +241,8 @@ def viewtraj_parser():
 if __name__ == "__main__":
   viewtraj_runner()
   
-  # python /MieT5/MyRepos/FEater/feater/scripts/view_traj.py -t /media/yzhang/MieT72/Data/feater_database_coord/Topology_ASN.pdb -f 1  /media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_ASN.h5 -a 1 -am @C,CA,N
+  # python /MieT5/MyRepos/FEater/feater/scripts/view_traj.py -t /media/yzhang/MieT72/Data/feater_database_coord/Topology_ASN.pdb \
+  # /media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_ASN.h5 -a 1 -am @C,CA,N -f 1 
 
 
 

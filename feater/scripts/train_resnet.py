@@ -13,16 +13,8 @@ import torchvision.models
 from feater import io, utils, dataloader
 
 
-FCFeatureNumberMap = {
-  "resnet18": 512, 
-  "resnet34": 512, 
-  "resnet50": 2048, 
-  "resnet101": 2048, 
-  "resnet152": 2048, 
-}
-
-
 def get_resnet_model(resnettype: str):
+  FCFeatureNumberMap = {"resnet18": 512, "resnet34": 512, "resnet50": 2048, "resnet101": 2048,  "resnet152": 2048}
   resnettype = resnettype.lower()
   if resnettype == "resnet18":
     model = torchvision.models.resnet18()
@@ -35,7 +27,7 @@ def get_resnet_model(resnettype: str):
   elif resnettype == "resnet152":
     model = torchvision.models.resnet152()
   else: 
-    raise ValueError(f"Unknown ResNet type: {resnettype}")
+    raise ValueError(f"Unsupported ResNet type: {resnettype}")
   fc_number = FCFeatureNumberMap.get(resnettype, 2048)
   model.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3)
   model.fc = nn.Linear(fc_number, 20)
@@ -61,73 +53,32 @@ def evaluation(classifier, dataset, usecuda=True, batch_size=256, process_nr=32)
     pred_choice = pred_choice.data.max(1)[1]
     pred += pred_choice.cpu().tolist()
     label += valid_label.cpu().tolist()
+    
+    # TODO: Breakpoint Only for debugging
+    if i == 50:
+      break 
   valid_accuracy = np.sum(np.array(pred) == np.array(label)) / len(pred)
   print(f">>> Test set accuracy: {valid_accuracy:8.4f}")
   return pred, label
 
-def validation(classifier, dataset, usecuda=True, batch_size=256, process_nr=32):
-  print(">>> Start validation...")
-  classifier.eval()
-  valid_data, valid_label = next(dataset.mini_batches(batch_size=batch_size, process_nr=process_nr))
-  if usecuda:
-    valid_data, valid_label = valid_data.cuda(), valid_label.cuda()
-  ret = classifier(valid_data)
-
-  if isinstance(ret, Tensor):
-    # Default model which returns the predicted results
-    pred_choice = ret
-  elif isinstance(ret, tuple):
-    # Customized model which returns a tuple rather than the predicted results
-    pred_choice = ret[0]
-  else:
-    raise ValueError(f"Unexpected return type {type(ret)}")
-  loss = F.nll_loss(pred_choice, valid_label)
-  accuracy = utils.report_accuracy(pred_choice, valid_label, verbose=False)
-  print(f">>> Validation loss: {loss.item():8.4f} | Validation accuracy: {accuracy:8.4f}")
-  return loss, accuracy
-
 
 def parse_args():
   parser = argparse.ArgumentParser(description="Train the ResNet model based on the 2D Hilbert map")
-  parser.add_argument("-train", "--training_data", type=str, help="The file writes all of the absolute path of h5 files of training data set")
-  parser.add_argument("-valid", "--validation_data", type=str, help="The file writes all of the absolute path of h5 files of validation data set")
-  parser.add_argument("-test", "--test_data", type=str, help="The file writes all of the absolute path of h5 files of test data set")
-  parser.add_argument("-o", "--output_folder", type=str, default="cls", help="Output folder")
-
-  parser.add_argument("-b", "--batch_size", type=int, default=256, help="Batch size")
-  parser.add_argument("-e", "--epochs", type=int, default=1, help="Number of epochs")
-  parser.add_argument("-lr", "--learning_rate", type=float, default=0.001, help="Learning rate")
-  parser.add_argument("-itv", "--interval", type=int, default=50, help="How many batches to wait before logging training status")
-  parser.add_argument("-v", "--verbose", default=0, type=int, help="Verbose printing while training")
-  parser.add_argument("--data_workers", type=int, default=4, help="Number of workers for data loading")
-  parser.add_argument("--n_points", type=int, default=27, help="Num of points to use")
-  parser.add_argument("--manualSeed", type=int, help="Manual seed")
-  parser.add_argument("--pretrained", type=str, default=None, help="Pretrained model path")
-  parser.add_argument("--start_epoch", type=int, default=0, help="Start epoch")
+  parser = utils.standard_parser(parser)
+  
+  # Parameters specifically related to the network architecture, this training or script
   parser.add_argument("--type", type=str, default="resnet18", help="ResNet type")
+  parser.add_argument("--cuda", type=int, default=int(torch.cuda.is_available()), help="Use CUDA")
+  parser.add_argument("--train_batch_nr", type=int, default=4000, help="Breakpoint for training")   # TODO: Remove this line
 
+  # AFTER (ONLY AFTER) adding all arguments, do the sanity check
+  utils.parser_sanity_check(parser)
   args = parser.parse_args()
-  args.cuda = torch.cuda.is_available()
   if not args.manualSeed:
     args.seed = int(time.perf_counter().__str__().split(".")[-1])
   else:
     args.seed = int(args.manualSeed)
-
-  if (not args.training_data) or (not os.path.exists(args.training_data)):
-    parser.print_help()
-    raise ValueError(f"The training data file {args.training_data} does not exist.")
-  if (not args.validation_data) or (not os.path.exists(args.validation_data)):
-    parser.print_help()
-    raise ValueError(f"The validation data file {args.validation_data} does not exist.")
-  if (not args.test_data) or (not os.path.exists(args.test_data)):
-    parser.print_help()
-    raise ValueError(f"The test data file {args.test_data} does not exist.")
-  if (not args.output_folder) or (not os.path.exists(args.output_folder)):
-    parser.print_help()
-    raise ValueError(f"The output folder {args.output_folder} does not exist.")
   return args
-
-
 
 
 if __name__ == '__main__':
@@ -140,7 +91,6 @@ if __name__ == '__main__':
 
   BATCH_SIZE = args.batch_size
   EPOCH_NR = args.epochs
-  PADDING_NPOINTS = args.n_points
   LEARNING_RATE = args.learning_rate
 
   TRAIN_DATA = os.path.abspath(args.training_data)
@@ -155,6 +105,8 @@ if __name__ == '__main__':
   START_EPOCH = args.start_epoch
   RESNET_TYPE = args.type
 
+  with open(os.path.join(OUTPUT_DIR, "settings.json"), "w") as f:
+    f.write(SETTINGS)
 
   # Load necessary datasets 
   trainingfiles = utils.checkfiles(TRAIN_DATA)
@@ -184,24 +136,26 @@ if __name__ == '__main__':
         inputs, labels = inputs.cuda(), labels.cuda()
       optimizer.zero_grad()
       classifier.train()
-      outputs = classifier(inputs)   # Output is a Tensor(batch_size, 20)
+      outputs = classifier(inputs)         # Output is a Tensor(batch_size, 20)
       loss = criterion(outputs, labels)
       loss.backward()
       optimizer.step()
-
       accuracy = utils.report_accuracy(outputs, labels, verbose=False)
       print(f"Processing Batch {batch_idx:>6d}/{batch_nr:<6d} | Loss: {loss.item():8.4f} | Accuracy: {accuracy:8.4f}")
 
       if ((batch_idx + 1) % INTERVAL) == 0:
-        validation(classifier, valid_data, usecuda=USECUDA, batch_size=BATCH_SIZE, process_nr=WORKER_NR)
+        vdata, vlabel = next(valid_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR))
+        utils.validation(classifier, vdata, vlabel, usecuda=USECUDA, batch_size=BATCH_SIZE, process_nr=WORKER_NR)
 
-      if batch_idx + 1 == 100:
+      # TODO: Remove this when production
+      if (batch_idx + 1) == args.train_batch_nr:
         break
     scheduler.step()
     print(f"Epoch {epoch} takes {time.perf_counter() - st:.2f} seconds")
+    print("^" * 80)
     
-    modelfile_output = os.path.join(os.path.abspath(OUTPUT_DIR), f"voxnet_statusdic_{epoch}.pth")
-    conf_mtx_output  = os.path.join(os.path.abspath(OUTPUT_DIR), f"voxnet_confusion_{epoch}.png")
+    modelfile_output = os.path.join(os.path.abspath(OUTPUT_DIR), f"{RESNET_TYPE}_statusdic_{epoch}.pth")
+    conf_mtx_output  = os.path.join(os.path.abspath(OUTPUT_DIR), f"{RESNET_TYPE}_confusion_{epoch}.png")
     print(f"Saving the model to {modelfile_output} ...")
     torch.save(classifier.state_dict(), modelfile_output)
     print(f"Performing the prediction on the test set ...")

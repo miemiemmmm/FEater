@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import os, argparse, sys, time, copy
 
 import numpy as np
@@ -7,7 +6,7 @@ from pytraj import load as ptload
 from feater import RES2LAB, io, voxelize, utils
 
 
-def mol_to_voxel(mol:str, **kwargs):
+def mol_to_voxel(mol:str, kwargs):
   the_mol = ptload(mol)
   coord = the_mol.xyz[0]
   weights = np.ones(coord.shape[0])
@@ -28,20 +27,51 @@ def mol_to_voxel(mol:str, **kwargs):
 
 def make_hdf(hdf_name:str, coord_files:list, **kwargs):
   st = time.perf_counter()
-  with io.hdffile(hdf_name, 'w') as f:
-    c = 0
-    global_start_idx = 0
-    shape_voxel = np.array([32,32,32], dtype=np.int32)
-    voxel_settings = {
-      "dims": np.array(shape_voxel, dtype=int),
-      "boxsize": 16.0,
-      "cutoff": 12.0,
-      "sigma": 0.2
-    }
-    utils.add_data_to_hdf(f, "shape", shape_voxel)  # TODO: temporarily hard-coded
-    utils.add_data_to_hdf(f, "scale_factor", np.array([voxel_settings["boxsize"] / shape_voxel[0]], dtype=np.float32))
-    output_interval = 1000
+  
+  c = 0
+  global_start_idx = 0
+  shape_voxel = np.array([32,32,32], dtype=np.int32)
+  voxel_settings = {
+    "dims": np.array(shape_voxel, dtype=int),
+    "boxsize": 16.0,
+    "cutoff": 12.0,
+    "sigma": 0.2
+  }
+  utils.add_data_to_hdf(f, "shape", shape_voxel)  # TODO: temporarily hard-coded
+  utils.add_data_to_hdf(f, "scale_factor", np.array([voxel_settings["boxsize"] / shape_voxel[0]], dtype=np.float32))
+  utils.add_data_to_hdf(f, "cutoff", np.array([voxel_settings["cutoff"]], dtype=np.float32))
+  utils.add_data_to_hdf(f, "sigma", np.array([voxel_settings["sigma"]], dtype=np.float32))
+  
+  output_interval = 1000
+  print(f"Processing {len(coord_files)} files")
+  batches = np.array_split(coord_files, 10)
+  pool = mp.Pool(processes=8)
 
+  if kwargs["mode"] == "dual":
+    RES_LAB_MAP = constants.RES2LAB_DUAL 
+    KEY_LENGTH = 6
+  elif kwargs["mode"] == "single":
+    RES_LAB_MAP = constants.RES2LAB         # TODO: check this 
+    KEY_LENGTH = 3
+
+  # The main loop. 
+  for idx, batch in enumerate(batches):
+    results = pool.starmap(mol_to_voxel, [(f, voxel_settings) for f in batch])
+    voxel_buffer = np.concatenate([r[0] for r in results], dtype=np.float32)
+    coord_buffer = np.concatenate([r[1] for r in results], dtype=np.float32)
+    elems_buffer = np.concatenate([r[2] for r in results], dtype=np.int32)
+
+    atom_nums = np.array([r[1].shape[0] for r in results], dtype=np.int32)
+
+    label_buffer = np.array([RES_LAB_MAP[os.path.basename(f)[:KEY_LENGTH]] for f in batch], dtype=np.int32)
+    key_buffer = np.array([os.path.basename(f)[:KEY_LENGTH] for f in batch])                     # TODO NOTE: change this based on the residue type
+    key_buffer = np.array(key_buffer, dtype=h5py.string_dtype())
+
+
+
+
+
+  with io.hdffile(hdf_name, 'w') as f:
     voxel_buffer = np.zeros((output_interval*shape_voxel[0], shape_voxel[1], shape_voxel[2]), dtype=np.float32)
     label_buffer = np.full((output_interval), -1, dtype=np.int32)
     start_buffer = np.full((output_interval), -1, dtype=np.uint64)
@@ -107,12 +137,12 @@ def make_hdf(hdf_name:str, coord_files:list, **kwargs):
         elems_buffer = elems_buffer[:pointer_xyz]
 
         # Put the data to the HDF5 file  # compress 4500 entries: Uncompress 565 MB; GZip Level 4: 87 MB; GZip Level 9: 86 MB; Level 0: 566 MB; Level 1: 90 MB; Level 2: 89MB
-        utils.add_data_to_hdf(f, "voxel", voxel_buffer, dtype=np.float32, chunks=True, maxshape=(None, shape_voxel[1], shape_voxel[2]), compression="gzip", compression_opts=1)
-        utils.add_data_to_hdf(f, "label", label_buffer, dtype=np.int32, chunks=True, maxshape=[None])
-        utils.add_data_to_hdf(f, "coord", coord_buffer, dtype=np.float32, chunks=True, maxshape=[None, 3], compression="gzip", compression_opts=1)
-        utils.add_data_to_hdf(f, "coord_starts", start_buffer, dtype=np.uint64, chunks=True, maxshape=[None])
-        utils.add_data_to_hdf(f, "coord_ends", end_buffer, dtype=np.uint64, chunks=True, maxshape=[None])
-        utils.add_data_to_hdf(f, "element_mass", elems_buffer, dtype=np.int32, chunks=True, maxshape=[None])
+        utils.add_data_to_hdf(f, "voxel", voxel_buffer, dtype=np.float32, chunks=True, maxshape=(None, shape_voxel[1], shape_voxel[2]), compression="gzip", compression_opts=4)
+        utils.add_data_to_hdf(f, "label", label_buffer, dtype=np.int32, chunks=True, maxshape=[None], compression="gzip", compression_opts=4)
+        utils.add_data_to_hdf(f, "coord", coord_buffer, dtype=np.float32, chunks=True, maxshape=[None, 3], compression="gzip", compression_opts=4)
+        utils.add_data_to_hdf(f, "coord_starts", start_buffer, dtype=np.uint64, chunks=True, maxshape=[None], compression="gzip", compression_opts=4)
+        utils.add_data_to_hdf(f, "coord_ends", end_buffer, dtype=np.uint64, chunks=True, maxshape=[None], compression="gzip", compression_opts=4)
+        utils.add_data_to_hdf(f, "element_mass", elems_buffer, dtype=np.int32, chunks=True, maxshape=[None], compression="gzip", compression_opts=4)
 
         # Reset the buffers and the time counter
         voxel_buffer = np.zeros((output_interval * shape_voxel[0], shape_voxel[1], shape_voxel[2]), dtype=np.float32)

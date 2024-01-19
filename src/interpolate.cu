@@ -6,7 +6,11 @@
 
 // Kernel functions
 __device__ double gaussian_device(const double x, const double mu, const double sigma) {
-	return std::exp(-0.5 * ((x - mu) / sigma) * ((x - mu) / sigma)) / (sigma * std::sqrt(2 * M_PI));
+	return exp(-0.5 * ((x - mu) / sigma) * ((x - mu) / sigma)) / (sigma * sqrt(2 * M_PI));
+}
+
+__global__ void gaussian_host(double *ret, const double x, const double mu, const double sigma) {
+	*ret = gaussian_device(x, mu, sigma);
 }
 
 
@@ -127,11 +131,16 @@ void interpolate_host(float *interpolated, const float *coord, const float *weig
 	int gpu_grid_size = (grid_size + gpu_block_size - 1) / gpu_block_size;
 	for (int atm_idx = 0; atm_idx < atom_nr; ++atm_idx) {
 		float coordi[3] = {coord[atm_idx*3], coord[atm_idx*3+1], coord[atm_idx*3+2]};
-	 	cudaMemcpy(coordi_gpu, coordi, 3 * sizeof(float), cudaMemcpyHostToDevice);
 
+		// Copy the coordinate to the GPU
+	 	cudaMemcpy(coordi_gpu, coordi, 3 * sizeof(float), cudaMemcpyHostToDevice);
 		// Kernel to compute the temporary array
 		coordi_interp_kernel<<<gpu_block_size, gpu_grid_size>>>(coordi_gpu, tmp_interp, dims_gpu, cutoff, sigma);
 		cudaDeviceSynchronize();
+
+		// Check the tmp_interp array
+		// float *tmp_interp_host = new float[grid_size];
+		// cudaMemcpy(tmp_interp_host, tmp_interp, grid_size * sizeof(float), cudaMemcpyDeviceToHost);
 
 		// Compute the sum of the temporary array and normalize it
 		cudaMemset(tmp_sum, 0, sizeof(float));
@@ -148,11 +157,13 @@ void interpolate_host(float *interpolated, const float *coord, const float *weig
 		float norm_chk_host = 0;
 		cudaMemcpy(&tmp_sum_host, tmp_sum, sizeof(float), cudaMemcpyDeviceToHost);
 		cudaMemcpy(&norm_chk_host, norm_chk, sizeof(float), cudaMemcpyDeviceToHost);
+
 		if (tmp_sum_host - 0 < 0.01) {
 			/* The sum of the temporary array is used for normalization, skip if the sum is 0 */
 			std::cerr << "Warning: The sum of the temporary array is 0" << std::endl;
 			continue;
-		} else if (std::abs(norm_chk_host - weight[atm_idx]) > 0.01) {
+		}
+		if (std::abs(norm_chk_host - weight[atm_idx]) > 0.01) {
 			std::cerr << "Warning: The sum of the normalized temporary array is not equal to the weight: " << norm_chk_host << "/" << weight[atm_idx] << std::endl;
 		}
 

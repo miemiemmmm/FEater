@@ -70,6 +70,52 @@ class hdffile(h5.File):
     dset.resize(new_shape)
     # Append the new data to the dataset
     dset[current_shape[0]:new_shape[0]] = data
+  
+  def dump_top(self, top, keyword):
+    if isinstance(top, pt.Topology):
+      thedict = top.to_dict()
+    elif isinstance(top, str):
+      thedict = pt.load_topology(top).to_dict()
+    elif isinstance(top, dict):
+      thedict = top
+    else: 
+      raise ValueError("Unknown type of topology")
+    
+    if keyword in self.keys():
+      # remove the existing group
+      print(f"Warning: Found previous group {keyword} in hdf file, removing it...")
+      del self[keyword]
+    
+    group = self.create_group(keyword)
+    for key,val in thedict.items(): 
+      data = np.array(val)
+      if "name" in key or "type" in key:
+        data = data.astype(h5.string_dtype())
+        group.create_dataset(key, data=data, dtype=h5.string_dtype(), shape=data.shape)
+      elif "_index" in key or  key == "resid" or key == "mol_number": 
+        data = data.astype(np.int64)
+        group.create_dataset(key, data=data, dtype=np.int64, shape=data.shape)
+      else:
+        data = data.astype(np.float64)
+        group.create_dataset(key, data=data, dtype=np.float64, shape=data.shape)
+
+  def get_top(self, keyword): 
+    if keyword not in self.keys(): 
+      raise ValueError("Keyword {} not found in hdf file!".format(keyword))
+    group = self[keyword]
+    topo_dict = {}
+    for key in group.keys(): 
+      data = np.array(group[key])
+      if "name" in key or "type" in key:
+        data = data.astype(np.str_)
+      elif "_index" in key or  key == "resid" or key == "mol_number": 
+        data = data.astype(np.int64)
+      else:
+        data = data.astype(np.float64)
+      topo_dict[key] = data
+    top = pt.Topology()
+    top = top.from_dict(topo_dict)
+    return top
 
 
 class StructureProcessor:
@@ -318,6 +364,59 @@ def _atom_matches_smarts(atom, smarts):
   return False
 
 
+def dump_pdb_to_hdf(pdbfile, h5file, keyword):
+  top = pt.load_topology(pdbfile)
+  dump_top_to_hdf(top, h5file, keyword)
+
+
+
+def dump_top_to_hdf(top, h5file, keyword):
+  thedict = top.to_dict()
+  with hdffile(h5file, "a") as hdf: 
+    if keyword in hdf.keys():
+      # remove the existing group
+      print(f"Warning: Found previous group {keyword} in hdf file, removing it...")
+      del hdf[keyword]
+    group = hdf.create_group(keyword)
+    for key,val in thedict.items(): 
+      data = np.array(val)
+      if "name" in key or "type" in key:
+        data = data.astype(h5.string_dtype())
+        group.create_dataset(key, data=data, dtype=h5.string_dtype(), shape=data.shape)
+      elif "_index" in key or  key == "resid" or key == "mol_number": 
+        data = data.astype(np.int64)
+        group.create_dataset(key, data=data, dtype=np.int64, shape=data.shape)
+      else:
+        data = data.astype(np.float64)
+        group.create_dataset(key, data=data, dtype=np.float64, shape=data.shape)
+
+
+def load_top_from_hdf(h5file, keyword):
+  """
+  All of them could be present as np.array
+    string type: atom_name, atom_type, resname
+    int type: bond_index, dihedral_index, mol_number, resid
+    float type: atom_charge, atom_mass, box
+  """
+  with hdffile(h5file, "r") as hdf:
+    if keyword not in hdf.keys(): 
+      raise ValueError("Keyword {} not found in hdf file!".format(keyword))
+    group = hdf[keyword]
+    topo_dict = {}
+    for key in group.keys(): 
+      data = np.array(group[key])
+      if "name" in key or "type" in key:
+        data = data.astype(np.str_)
+      elif "_index" in key or  key == "resid" or key == "mol_number": 
+        data = data.astype(np.int64)
+      else:
+        data = data.astype(np.float64)
+      topo_dict[key] = data
+  top = pt.Topology()
+  top = top.from_dict(topo_dict)
+  return top
+
+
 
 FREQ_CONFIG = [
   "GLY_5",
@@ -344,32 +443,6 @@ FREQ_CONFIG = [
   "TRP_15",  # 24
 ]
 
-# HOMOGENEOUS = {
-#   "ALA": 1,
-#   "ARG": 1,
-#   "ASN": 1,
-#   "GLN": 1,
-#   "GLY": 1,
-#   "ILE": 1,
-#   "LEU": 1,
-#   "MET": 1,
-#   "PHE": 1,
-#   "PRO": 1,
-#   "SER": 1,
-#   "THR": 1,
-#   "TRP": 1,
-#   "TYR": 1,
-#   "VAL": 1
-# }
-
 HOMOGENEOUS_LIST = ['ALA', 'ARG', 'ASN', 'GLN', 'GLY', 'ILE', 'LEU', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL']
 HETEROGENEOUS_LIST = ['ASP', 'CYS', 'GLU', 'HIS', 'LYS']
-
-# HETEROGENEOUS = {
-#   "ASP": 1, # ASH, ASP
-#   "CYS": 2, # CYS, CYX
-#   "GLU": 1, # GLH, GLU
-#   "HIS": 3, # HID, HIE, HIP ? Very special case
-#   "LYS": 1, # LYN, LYS
-# }
 
