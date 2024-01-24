@@ -106,7 +106,7 @@ def fix_residue(target_dir:str, pdb_file:str="", seq_file:str="", key_file:str="
     else:
       subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
   except subprocess.CalledProcessError as e:
-    print("Residue fixer failed", file=sys.stderr)
+    print("Residue fixer failed while the CAMPARI processing", file=sys.stderr)
     return {}
 
   expected_outpdb_name = os.path.join(target_dir, f"{BASENAME}_END.pdb")
@@ -128,7 +128,7 @@ def fix_residue(target_dir:str, pdb_file:str="", seq_file:str="", key_file:str="
     }
     return resultdict
   else:
-    print("Residue fixer failed", file=sys.stderr)
+    print("Residue fixer failed when reading the outputs from CAMPARI", file=sys.stderr)
     return {}
 
 

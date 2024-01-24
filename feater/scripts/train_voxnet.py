@@ -12,37 +12,12 @@ from feater.models.voxnet import VoxNet
 from feater import io, dataloader, utils
 
 
-def evaluation(classifier, dataset, usecuda=True, batch_size=256, process_nr=32):
-  print("Start evaluation...")
-  from torch import Tensor
-  classifier = classifier.eval()
-  pred = []
-  label = []
-  for i, data in enumerate(dataset.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR)):
-    valid_data, valid_label = data
-    if usecuda:
-      valid_data, valid_label = valid_data.cuda(), valid_label.cuda()
-    ret = classifier(valid_data)
-    if isinstance(ret, tuple):
-      pred_choice = ret[0]
-    elif isinstance(ret, Tensor):
-      pred_choice = ret
-    else:
-      raise ValueError(f"Unexpected return type {type(ret)}")
-    pred_choice = pred_choice.data.max(1)[1]
-    pred += pred_choice.cpu().tolist()
-    label += valid_label.cpu().tolist()
-    # TODO: Remove this line
-    if i == 50:
-      break 
-  return pred, label
-
-
 def parse_args():
   parser = argparse.ArgumentParser(description="Train VoxNet")
   parser = utils.standard_parser(parser)
 
   parser.add_argument("--cuda", type=int, default=int(torch.cuda.is_available()), help="Use CUDA")
+  parser.add_argument("--dataset", type=str, default="single", help="Dataset to use")
 
   utils.parser_sanity_check(parser)
   args = parser.parse_args()  
@@ -50,96 +25,104 @@ def parse_args():
     args.seed = int(time.perf_counter().__str__().split(".")[-1])
   else:
     args.seed = int(args.manualSeed)
+
+  if args.dataset == "single":
+    args.class_nr = 20
+  elif args.dataset == "dual":
+    args.class_nr = 400
+  else:
+    raise ValueError(f"Unexpected dataset {args.dataset}; Only single (FEater-Single) and dual (FEater-Dual) are supported")
   return args
 
-if __name__ == "__main__":
-  args = parse_args()
-  SETTINGS = json.dumps(vars(args), indent=2)
-  print("Settings of this training:")
-  print(SETTINGS)
 
-  random.seed(args.seed)
-  torch.manual_seed(args.seed)
-  BATCH_SIZE = args.batch_size
-  START_EPOCH = args.start_epoch
-  EPOCH_NR = args.epochs
-  LEARNING_RATE = args.learning_rate
+def perform_training(training_settings: dict): 
+  USECUDA = training_settings["cuda"]
 
-  TRAIN_DATA = os.path.abspath(args.training_data)
-  VALID_DATA = os.path.abspath(args.validation_data)
-  TEST_DATA = os.path.abspath(args.test_data)
-  OUTPUT_DIR = os.path.abspath(args.output_folder)
-
-  INTERVAL = args.interval
-  WORKER_NR = args.data_workers
-  VERBOSE = True if args.verbose > 0 else False
-  LOAD_MODEL = args.pretrained
-  USECUDA = True if args.cuda else False
-
-  with open(os.path.join(OUTPUT_DIR, "settings.json"), 'w') as f:
-    f.write(SETTINGS)
-
+  random.seed(training_settings["seed"])
+  torch.manual_seed(training_settings["seed"])
+  np.random.seed(training_settings["seed"])
   
+  st = time.perf_counter()
+  # Load the datasets
+  trainingfiles = utils.checkfiles(training_settings["training_data"])
+  validfiles = utils.checkfiles(training_settings["validation_data"])
+  testfiles = utils.checkfiles(training_settings["test_data"])
   # Load the data.
   # NOTE: In Voxel based training, the bottleneck is the SSD data reading.
   # NOTE: Putting the dataset to SSD will significantly speed up the training.
-  trainingfiles = utils.checkfiles(TRAIN_DATA)
   training_data = dataloader.VoxelDataset(trainingfiles)
-  validfiles = utils.checkfiles(VALID_DATA)
   valid_data = dataloader.VoxelDataset(validfiles)
-  testfiles = utils.checkfiles(TEST_DATA)
   test_data = dataloader.VoxelDataset(testfiles)
 
-  # VoxNet model
-  voxnet = VoxNet(n_classes=20)
-  if LOAD_MODEL and len(LOAD_MODEL) > 0:
-    voxnet.load_state_dict(torch.load(LOAD_MODEL))
-  voxnet.cuda()
+  classifier = VoxNet(n_classes=training_settings["class_nr"])
+  if training_settings["pretrained"] and len(training_settings["pretrained"]) > 0:
+    classifier.load_state_dict(torch.load(training_settings["pretrained"]))
+  if USECUDA:
+    classifier.cuda()
 
-  optimizer = optim.Adam(voxnet.parameters(), lr=LEARNING_RATE, betas=(0.9, 0.999))
+  optimizer = optim.Adam(classifier.parameters(), lr=training_settings["learning_rate"], betas=(0.9, 0.999))
   criterion = nn.CrossEntropyLoss()
   scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.5)
-
-  st = time.perf_counter()
+  
+  print(f"Number of parameters: {sum([p.numel() for p in classifier.parameters()])}")
+  START_EPOCH = training_settings["start_epoch"]
+  EPOCH_NR = training_settings["epochs"]
+  BATCH_SIZE = training_settings["batch_size"]
+  INTERVAL = training_settings["interval"]
+  WORKER_NR = training_settings["data_workers"]
   for epoch in range(START_EPOCH, EPOCH_NR):
-    print("#" * 80)
-    print(f"Running the epoch {epoch}/{EPOCH_NR}")
     st = time.perf_counter()
+    message = f" Running the epoch {epoch:>4d}/{EPOCH_NR:<4d} at {time.ctime()} "
+    print(f"{message:#^80}")
     batch_nr = (len(training_data) + BATCH_SIZE - 1) // BATCH_SIZE
     for batch_idx, batch in enumerate(training_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR)):
-      inputs, labels = batch
+      # if (batch_idx+1) % 300 == 0:   # TODO: Remove this line when production
+      #   break
+      train_data, train_label = batch
       if USECUDA:
-        inputs, labels = inputs.cuda(), labels.cuda()
-
-      # zero the parameter gradients
+        train_data, train_label = train_data.cuda(), train_label.cuda()
       optimizer.zero_grad()
-      voxnet = voxnet.train()
-      outputs = voxnet(inputs)
-      loss = criterion(outputs, labels)
+      classifier = classifier.train()
+      pred = classifier(train_data)
+      loss = criterion(pred, train_label)
       loss.backward()
       optimizer.step()
-      accuracy = utils.report_accuracy(outputs, labels, verbose=False)
-      print(f"Processing Batch {batch_idx:>6d}/{batch_nr:<6d} | Loss: {loss.item():8.4f} | Accuracy: {accuracy:8.4f}")
-
-      if (batch_idx + 1) % 50 == 0:
-        # Check the accuracy on the validation set
-        vdata, vlabel = next(valid_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR))
-        utils.validation(voxnet, vdata, vlabel, usecuda=USECUDA, batch_size=BATCH_SIZE, process_nr=WORKER_NR)
-
-      # TODO: Remove this when production
-      if (batch_idx + 1) == 2000:
-        break
+      accuracy = utils.report_accuracy(pred, train_label, verbose=False)
+      print(f"Processing the block {batch_idx:>5d}/{batch_nr:<5d}; Loss: {loss.item():8.4f}; Accuracy: {accuracy:8.4f}")
+      if (batch_idx + 1) % INTERVAL == 0:
+        vdata, vlabel = next(valid_data.mini_batches(batch_size=10000, process_nr=WORKER_NR))
+        utils.validation(classifier, vdata, vlabel, usecuda=USECUDA)
+        print(f"Estimated epoch time: {(time.perf_counter() - st) / (batch_idx + 1) * batch_nr:.2f} seconds")
     scheduler.step()
-    print(f"Epoch {epoch} takes {time.perf_counter() - st:.2f} seconds")
-    print("^" * 80)
-
-    modelfile_output = os.path.join(os.path.abspath(OUTPUT_DIR), f"voxnet_{epoch}.pth")
-    conf_mtx_output  = os.path.join(os.path.abspath(OUTPUT_DIR), f"voxnet_confmatrix_{epoch}.png")
+    # Save the model
+    modelfile_output = os.path.join(os.path.abspath(training_settings["output_folder"]), f"voxnet_{epoch}.pth")
+    conf_mtx_output  = os.path.join(os.path.abspath(training_settings["output_folder"]), f"voxnet_confmatrix_{epoch}.png")
     print(f"Saving the model to {modelfile_output} ...")
-    torch.save(voxnet.state_dict(), modelfile_output)
-
+    torch.save(classifier.state_dict(), modelfile_output)
     print(f"Performing the prediction on the test set ...")
-    pred, label = evaluation(voxnet, test_data)
-    print(f"Saving the confusion matrix to {conf_mtx_output} ...")
-    utils.confusion_matrix(pred, label, output_file=conf_mtx_output)
+    tdata, tlabel = next(test_data.mini_batches(batch_size=10000, process_nr=WORKER_NR))
+    pred, label = utils.validation(classifier, tdata, tlabel, usecuda=USECUDA)
+    with io.hdffile(os.path.join(training_settings["output_folder"], "performance.h5") , "a") as hdffile:
+      correct = np.count_nonzero(pred == label)
+      accuracy = correct / float(label.shape[0])
+      utils.update_hdf_by_slice(hdffile, "accuracy", np.array([accuracy], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
+    
+    if training_settings["dataset"] == "single":
+      print(f"Saving the confusion matrix to {conf_mtx_output} ...")
+      utils.confusion_matrix(pred, label, output_file=conf_mtx_output)
+    else: 
+      pass
+
+if __name__ == "__main__":
+  args = parse_args()
+  SETTINGS = vars(args)
+  _SETTINGS = json.dumps(SETTINGS, indent=2)
+  print("Settings of this training:")
+  print(_SETTINGS)
+
+  with open(os.path.join(SETTINGS["output_folder"], "settings.json"), "w") as f:
+    f.write(_SETTINGS)
+
+  perform_training(SETTINGS)
+
 

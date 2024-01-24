@@ -95,9 +95,6 @@ def make_hdf(inputhdf:str, outputhdf:str, interp_settings:dict):
       face_buffer[np.s_[len_faces[res_i]:len_faces[res_i+1]], :] = results[res_i][1]
       xyzr_buffer[np.s_[len_xyzr[res_i]:len_xyzr[res_i+1]], :] = results[res_i][2]
 
-    # np.concatenate([_r[0] for _r in results], axis=0)
-    # face_buffer = np.concatenate([_r[1] for _r in results], axis=0)
-    # xyzr_buffer = np.concatenate([_r[2] for _r in results], axis=0)
     with io.hdffile(inputhdf, "r") as f: 
       label_buffer = [f["label"][i] for i in batch]
       label_buffer = np.array(label_buffer, dtype=np.int32)
@@ -169,17 +166,6 @@ def make_hdf(inputhdf:str, outputhdf:str, interp_settings:dict):
       utils.update_hdf_by_slice(f, "vert_ends", vert_ed_buffer, slice_labels, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
       utils.update_hdf_by_slice(f, "face_starts", face_st_buffer, slice_labels, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
       utils.update_hdf_by_slice(f, "face_ends", face_ed_buffer, slice_labels, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
-
-      # utils.add_data_to_hdf(f, "xyzr", xyzr_buffer, dtype=np.float32, maxshape=[None, 4], compression="gzip", compression_opts=4)
-      # utils.add_data_to_hdf(f, "vertices", vertex_buffer, dtype=np.float32, maxshape=[None, 3], compression="gzip", compression_opts=4)
-      # utils.add_data_to_hdf(f, "faces", face_buffer, dtype=np.int32, maxshape=[None, 3], compression="gzip", compression_opts=4)
-      # utils.add_data_to_hdf(f, "label", label_buffer, dtype=np.int32, maxshape=[None], compression="gzip", compression_opts=4)
-      # utils.add_data_to_hdf(f, "xyzr_starts", xyzr_st_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
-      # utils.add_data_to_hdf(f, "xyzr_ends", xyzr_ed_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
-      # utils.add_data_to_hdf(f, "vert_starts", vert_st_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
-      # utils.add_data_to_hdf(f, "vert_ends", vert_ed_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
-      # utils.add_data_to_hdf(f, "face_starts", face_st_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
-      # utils.add_data_to_hdf(f, "face_ends", face_ed_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
 
     print(f"Batch {idx+1:4d} / {len(batches):4d} ({len(batch):4d} entries) done in {(time.perf_counter() - st_batch)*1000:6.2f} us, Average speed: {(time.perf_counter() - st_batch)*1000 / len(batch):6.2f} us per entry")
 

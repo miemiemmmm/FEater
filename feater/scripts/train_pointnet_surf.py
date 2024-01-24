@@ -5,10 +5,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
-import torch.utils.data as data
 
-from pointnet.model import PointNetCls
+from feater.models.pointnet import PointNetCls
 from feater import io, constants, dataloader, utils
 
 def evaluation(classifier, dataset, usecuda=True, batch_size=256, process_nr=32):

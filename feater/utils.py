@@ -13,8 +13,6 @@ import matplotlib.pyplot as plt
 from . import constants
 
 
-
-
 def checkfiles(file_list:str, basepath="") -> list:
   with open(file_list, 'r') as f:
     files = f.read().strip("\n").split('\n')
@@ -52,26 +50,38 @@ def report_accuracy(pred, label, verbose=True):
     print(f"Accuracy: {accuracy}")
   return accuracy
 
-def validation(classifier, valid_data, valid_label, usecuda=True, batch_size=256, process_nr=32):
+def validation(classifier, valid_data, valid_label, usecuda=True, batch_size=50):
   print(">>> Start validation...")
   classifier.eval()
-  # valid_data, valid_label = next(dataset.mini_batches(batch_size=batch_size, process_nr=process_nr))
-  if usecuda:
-    valid_data, valid_label = valid_data.cuda(), valid_label.cuda()
-  ret = classifier(valid_data)
+  valid_data_batches = torch.split(valid_data, batch_size, dim=0)
+  valid_label_batches = torch.split(valid_label, batch_size, dim=0)
+  ret_pred = []
+  ret_label = []
+  for val_data, val_label in zip(valid_data_batches, valid_label_batches):
+    if usecuda:
+      val_data, val_label = val_data.cuda(), val_label.cuda()
+    ret = classifier(val_data)
 
-  if isinstance(ret, Tensor):
-    # Default model which returns the predicted results
-    pred_choice = ret
-  elif isinstance(ret, tuple):
-    # Customized model which returns a tuple rather than the predicted results
-    pred_choice = ret[0]
-  else:
-    raise ValueError(f"Unexpected return type {type(ret)}")
-  loss = F.cross_entropy(pred_choice, valid_label)
-  accuracy = report_accuracy(pred_choice, valid_label, verbose=False)
-  print(f">>> Validation loss: {loss.item():8.4f} | Validation accuracy: {accuracy:8.4f}")
-  return loss, accuracy
+    if isinstance(ret, Tensor):
+      # Default model which returns the predicted results
+      pred_choice = ret
+    elif isinstance(ret, tuple):
+      # Customized model which returns a tuple rather than the predicted results
+      pred_choice = ret[0]
+    else:
+      raise ValueError(f"Unexpected return type {type(ret)}")
+    loss = F.cross_entropy(pred_choice, val_label)
+    accuracy = report_accuracy(pred_choice, val_label, verbose=False)
+    print(f">>> Validation loss: {loss.item():8.4f} | Validation accuracy: {accuracy:8.4f}")
+
+    pred_choice = pred_choice.data.max(1)[1]
+    pred = pred_choice.cpu().tolist()
+    label = val_label.cpu().tolist()
+    ret_pred += pred
+    ret_label += label
+  ret_pred = np.array(ret_pred)
+  ret_label = np.array(ret_label)
+  return ret_pred, ret_label
 
 
 def confusion_matrix(predictions, labels, output_file="confusion_matrix.png"):
@@ -83,8 +93,6 @@ def confusion_matrix(predictions, labels, output_file="confusion_matrix.png"):
   Returns:
     Save to figure file
   """
-
-
   nr_classes = 20
   conf_mat = np.zeros((nr_classes, nr_classes), dtype=np.int32)
   for pred, label in zip(predictions, labels):
@@ -122,9 +130,28 @@ def confusion_matrix(predictions, labels, output_file="confusion_matrix.png"):
   plt.savefig(output_file, dpi=300, bbox_inches="tight")
   plt.close()
 
+def plot_matrix(conf_mat, output_file="confusion_matrix.png"):
+  # Plot the confusion matrix
+  fig, ax  = plt.subplots(figsize=(16, 16))
+  im = ax.imshow(conf_mat, cmap="inferno", vmin=0, vmax=100)
+  ax.set_title(f"Confusion Matrix of the PointNet Classifier\nOvervall Accuracy: {percent_acc:.3f}, Mean Accuracy: {mean_acc:.3f}", fontsize=20)
+  ax.set_xlabel("Ground Truth", fontsize=20)
+  ax.set_ylabel("Prediction", fontsize=20)
+  tick_labels = [f"{constants.LAB2RES[i]} ({i})" for i in range(nr_classes)]
+  ax.set_xticks(np.arange(nr_classes))
+  ax.set_yticks(np.arange(nr_classes))
+  ax.set_xticklabels(tick_labels, rotation=-45, fontsize=20)
+  ax.set_yticklabels(tick_labels, fontsize=20)
 
-
-
+  # Mark text on the confusion matrix
+  for i in range(nr_classes):
+    for j in range(nr_classes):
+      if conf_mat[i, j] > 10:
+        ax.text(j,i, f"{int(conf_mat[i, j])}", ha="center", va="center", color="white" if conf_mat[i, j] < 50 else "black", fontsize=15, fontweight="bold")
+  cbar = fig.colorbar(im, ax=ax, shrink=0.8, aspect=30)
+  cbar.ax.tick_params(labelsize=20)
+  plt.savefig(output_file, dpi=300, bbox_inches="tight")
+  plt.close()
 
 
 def label_counts(train_label):
@@ -134,11 +161,14 @@ def label_counts(train_label):
     train_label: The labels of the training data
   """
   uniq = unique([constants.LAB2RES[int(l)] for l in train_label], return_counts=True)
-  for res in uniq[0]:
+  for res in constants.RES: 
     print(f"{res:^4s}", end=" | ")
   print("\n", end="")
-  for count in uniq[1]:
-    print(f"{count:^4d}", end=" | ")
+  for res in constants.RES: 
+    if res in uniq[0]:
+      print(f"{uniq[1][uniq[0] == res][0]:^4d}", end=" | ")
+    else:
+      print(f"{0:^4d}", end=" | ")
   print("\n", end="")
 
 

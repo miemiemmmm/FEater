@@ -18,21 +18,17 @@ def traj_to_pdb(resname, top, crd):
 
     with open(tempf_seq, "w") as tempf:
       if resname == "HIS":
-        r1name = "HID_N_C"
+        r1name = "HID"
       elif resname in ["HID", "HIE", "HIP"]:
-        r1name = resname[:-1] + "_N_C"
+        r1name = resname
+      elif resname in ["CYS", "CYX"]:
+        r1name = "CYS"
       else:
         r1name = resname
       tempf.write(f"{r1name}_N_C\n")
       tempf.write("END\n")
     output_pdb = fix_residue.fix_residue(tempdir, seq_file=tempf_seq, pdb_file=tempf_pdb, key_file=tempf_key)
   return output_pdb.get("result_pdb", "")
-  
-def traj_to_surf(resname, top, crd):
-  thepdb = traj_to_pdb(resname, top, crd)
-
-  return ([], [])
-
 
 # Needed settings:
 # - output_file: str

@@ -9,8 +9,10 @@ from torch.utils.data import DataLoader
 # @profile
 def benchmark_dataset_method(dset, exit_point=None, **kwargs):
   st = time.perf_counter()
+  print(f"Started benchmarking ...")
   data_size = 0
-  for idx, datai in enumerate(dset.mini_batches(**kwargs)): 
+  for idx, datai in enumerate(dset.mini_batches()): 
+    print(f"batch {idx} used {time.perf_counter()-st:6.2f} s.")
     data, label = datai
     data_size += data.nbytes
     data.cuda()
@@ -18,6 +20,7 @@ def benchmark_dataset_method(dset, exit_point=None, **kwargs):
     if exit_point is not None and idx == exit_point: 
       break
     print(data.shape)
+    st = time.perf_counter()
   # st = time.perf_counter()
   print(f"Data size: {data_size/1024/1024:6.2f} MB, retrieval rate: {data_size/(time.perf_counter()-st)/1024/1024:6.2f} MB/s ")
 
@@ -40,7 +43,6 @@ def benchmark_dataloader(dset, exit_point=None, **kwargs):
     
     if exit_point is not None and idx == exit_point: 
       break
-  # st = time.perf_counter()
   print(f"Data size: {data_size/1024/1024:6.2f} MB, retrieval rate: {data_size/(time.perf_counter()-st)/1024/1024:6.2f} MB/s ")
 
 
@@ -52,9 +54,9 @@ if __name__ == "__main__":
   # dset = dataloader.SurfDataset(input_file, batch_size=100, process_nr=4)
 
   input_file = [
-    "/software/database/feater_database_voxel/TrainingSet_GLU.h5",
-    "/software/database/feater_database_voxel/TrainingSet_LEU.h5",
-    "/software/database/feater_database_voxel/TrainingSet_VAL.h5",
+    # "/diskssd/yzhang/FEater_data/FEater_Single_VOX/TrainingSet_Voxel.h5"
+    "/disk2b/yzhang/testdata/FEater_Dual_VOX/TrainingSet_Voxel.h5"
+    # "/media/yzhang/MieT72/Data/FEater_Dual_VOX/TrainingSet_Voxel.h5"
   ]
 
   pnr = 36

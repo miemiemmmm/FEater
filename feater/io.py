@@ -7,7 +7,8 @@ import h5py as h5
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdMolTransforms, rdFMCS
 
-import feater, siesta
+import feater
+# import siesta
 
 
 class hdffile(h5.File):

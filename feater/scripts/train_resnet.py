@@ -1,4 +1,4 @@
-import argparse, time, json, os, random
+import argparse, time, json, os, random, subprocess
 
 import numpy as np
 
@@ -34,42 +34,14 @@ def get_resnet_model(resnettype: str):
   return model
 
 
-def evaluation(classifier, dataset, usecuda=True, batch_size=256, process_nr=32):
-  print(">>> Start evaluation...")
-  classifier = classifier.eval()
-  pred = []
-  label = []
-  for i, data in enumerate(dataset.mini_batches(batch_size=batch_size, process_nr=process_nr)):
-    valid_data, valid_label = data
-    if usecuda:
-      valid_data, valid_label = valid_data.cuda(), valid_label.cuda()
-    ret = classifier(valid_data)
-    if isinstance(ret, tuple):
-      pred_choice = ret[0]
-    elif isinstance(ret, Tensor):
-      pred_choice = ret
-    else:
-      raise ValueError(f"Unexpected return type {type(ret)}")
-    pred_choice = pred_choice.data.max(1)[1]
-    pred += pred_choice.cpu().tolist()
-    label += valid_label.cpu().tolist()
-    
-    # TODO: Breakpoint Only for debugging
-    if i == 50:
-      break 
-  valid_accuracy = np.sum(np.array(pred) == np.array(label)) / len(pred)
-  print(f">>> Test set accuracy: {valid_accuracy:8.4f}")
-  return pred, label
-
-
 def parse_args():
   parser = argparse.ArgumentParser(description="Train the ResNet model based on the 2D Hilbert map")
   parser = utils.standard_parser(parser)
   
   # Parameters specifically related to the network architecture, this training or script
-  parser.add_argument("--type", type=str, default="resnet18", help="ResNet type")
+  parser.add_argument("--resnet_type", type=str, default="resnet18", help="ResNet type")
   parser.add_argument("--cuda", type=int, default=int(torch.cuda.is_available()), help="Use CUDA")
-  parser.add_argument("--train_batch_nr", type=int, default=4000, help="Breakpoint for training")   # TODO: Remove this line
+  parser.add_argument("--dataset", type=str, default="single", help="Dataset to use")
 
   # AFTER (ONLY AFTER) adding all arguments, do the sanity check
   utils.parser_sanity_check(parser)
@@ -81,86 +53,103 @@ def parse_args():
   return args
 
 
-if __name__ == '__main__':
-  args = parse_args()
-  SETTINGS = json.dumps(vars(args), indent=2)
-  print("Settings of this training:")
-  print(SETTINGS)
-  random.seed(args.seed)
-  torch.manual_seed(args.seed)
+def perform_training(training_settings: dict): 
+  USECUDA = training_settings["cuda"]
 
-  BATCH_SIZE = args.batch_size
-  EPOCH_NR = args.epochs
-  LEARNING_RATE = args.learning_rate
+  random.seed(training_settings["seed"])
+  torch.manual_seed(training_settings["seed"])
+  np.random.seed(training_settings["seed"])
 
-  TRAIN_DATA = os.path.abspath(args.training_data)
-  VALID_DATA = os.path.abspath(args.validation_data)
-  TEST_DATA = os.path.abspath(args.test_data)
-  OUTPUT_DIR = os.path.abspath(args.output_folder)
-  LOAD_MODEL = args.pretrained
-  INTERVAL = args.interval
-  WORKER_NR = args.data_workers
-  VERBOSE = True if args.verbose > 0 else False
-  USECUDA = True if args.cuda else False
-  START_EPOCH = args.start_epoch
-  RESNET_TYPE = args.type
-
-  with open(os.path.join(OUTPUT_DIR, "settings.json"), "w") as f:
-    f.write(SETTINGS)
-
-  # Load necessary datasets 
-  trainingfiles = utils.checkfiles(TRAIN_DATA)
+  st = time.perf_counter()
+  trainingfiles = utils.checkfiles(training_settings["training_data"])
+  validfiles = utils.checkfiles(training_settings["validation_data"])
+  testfiles = utils.checkfiles(training_settings["test_data"])
   training_data = dataloader.HilbertCurveDataset(trainingfiles)
-  validfiles = utils.checkfiles(VALID_DATA)
   valid_data = dataloader.HilbertCurveDataset(validfiles)
-  testfiles = utils.checkfiles(TEST_DATA)
   test_data = dataloader.HilbertCurveDataset(testfiles)
 
-  classifier = get_resnet_model(RESNET_TYPE)
-  if LOAD_MODEL and len(LOAD_MODEL) > 0:
-    classifier.load_state_dict(torch.load(LOAD_MODEL))
-  optimizer = optim.Adam(classifier.parameters(), lr=LEARNING_RATE, betas=(0.9, 0.999))
-  criterion = nn.CrossEntropyLoss()
-  scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.5)
+  classifier = get_resnet_model(training_settings["resnet_type"])
+  if training_settings["pretrained"] and len(training_settings["pretrained"]) > 0:
+    classifier.load_state_dict(torch.load(training_settings["pretrained"]))
   if USECUDA:
-    classifier = classifier.cuda()
+    classifier.cuda()
 
+  optimizer = optim.Adam(classifier.parameters(), lr=training_settings["learning_rate"], betas=(0.9, 0.999))
+  criterion = nn.CrossEntropyLoss()
+  scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1, verbose = True)
+
+  print(f"Number of parameters: {sum([p.numel() for p in classifier.parameters()])}")
+  START_EPOCH = training_settings["start_epoch"]
+  EPOCH_NR = training_settings["epochs"]
+  BATCH_SIZE = training_settings["batch_size"]
+  INTERVAL = training_settings["interval"]
+  WORKER_NR = training_settings["data_workers"]
   for epoch in range(START_EPOCH, EPOCH_NR):
-    print("#" * 80)
-    print(f"Running the epoch {epoch}/{EPOCH_NR}")
     st = time.perf_counter()
-    batch_nr = int((len(training_data) + BATCH_SIZE - 1) // BATCH_SIZE)
+    message = f" Running the epoch {epoch:>4d}/{EPOCH_NR:<4d} at {time.ctime()} "
+    print(f"{message:#^80}")
+    batch_nr = (len(training_data) + BATCH_SIZE - 1) // BATCH_SIZE
     for batch_idx, batch in enumerate(training_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR)):
-      inputs, labels = batch
+      # if (batch_idx+1) % 500 == 0:   # TODO: Remove this line when production
+      #   break
+      train_data, train_label = batch
+      # print(train_data.shape, train_label.shape)
+      
       if USECUDA:
-        inputs, labels = inputs.cuda(), labels.cuda()
+        train_data, train_label = train_data.cuda(), train_label.cuda()
       optimizer.zero_grad()
-      classifier.train()
-      outputs = classifier(inputs)         # Output is a Tensor(batch_size, 20)
-      loss = criterion(outputs, labels)
+      classifier = classifier.train()
+      pred = classifier(train_data)
+      loss = criterion(pred, train_label)
       loss.backward()
       optimizer.step()
-      accuracy = utils.report_accuracy(outputs, labels, verbose=False)
-      print(f"Processing Batch {batch_idx:>6d}/{batch_nr:<6d} | Loss: {loss.item():8.4f} | Accuracy: {accuracy:8.4f}")
-
-      if ((batch_idx + 1) % INTERVAL) == 0:
-        vdata, vlabel = next(valid_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR))
-        utils.validation(classifier, vdata, vlabel, usecuda=USECUDA, batch_size=BATCH_SIZE, process_nr=WORKER_NR)
-
-      # TODO: Remove this when production
-      if (batch_idx + 1) == args.train_batch_nr:
-        break
-    scheduler.step()
-    print(f"Epoch {epoch} takes {time.perf_counter() - st:.2f} seconds")
-    print("^" * 80)
-    
-    modelfile_output = os.path.join(os.path.abspath(OUTPUT_DIR), f"{RESNET_TYPE}_statusdic_{epoch}.pth")
-    conf_mtx_output  = os.path.join(os.path.abspath(OUTPUT_DIR), f"{RESNET_TYPE}_confusion_{epoch}.png")
+      accuracy = utils.report_accuracy(pred, train_label, verbose=False)
+      
+      print(f"Processing the block {batch_idx:>5d}/{batch_nr:<5d}; Loss: {loss.item():8.4f}; Accuracy: {accuracy:8.4f}")
+      if (batch_idx + 1) % INTERVAL == 0:
+        if not os.path.exists(os.path.join(training_settings["output_folder"], "tmp_figs")):
+          subprocess.call(["mkdir", "-p", os.path.join(training_settings["output_folder"], "tmp_figs")])
+        vdata, vlabel = next(valid_data.mini_batches(batch_size=10000, process_nr=WORKER_NR))
+        preds, labels = utils.validation(classifier, vdata, vlabel, usecuda=USECUDA)
+        print(f"Estimated epoch time: {(time.perf_counter() - st) / (batch_idx + 1) * batch_nr:.2f} seconds")
+        print("#"*100)
+        print("Preds:")
+        utils.label_counts(preds)
+        print("Labels:")
+        utils.label_counts(labels)
+        print("#"*100)
+        utils.confusion_matrix(preds, labels, output_file=os.path.join(os.path.abspath(training_settings["output_folder"]), f"tmp_figs/idx_{epoch}_{batch_idx}.png"))
+    # Save the model
+    modelfile_output = os.path.join(os.path.abspath(training_settings["output_folder"]), f"resnet_{epoch}.pth")
+    conf_mtx_output  = os.path.join(os.path.abspath(training_settings["output_folder"]), f"resnet_confmatrix_{epoch}.png")
     print(f"Saving the model to {modelfile_output} ...")
     torch.save(classifier.state_dict(), modelfile_output)
     print(f"Performing the prediction on the test set ...")
-    pred, label = evaluation(classifier, test_data, usecuda=USECUDA, batch_size=BATCH_SIZE, process_nr=WORKER_NR)
-    print(f"Saving the confusion matrix to {conf_mtx_output} ...")
-    utils.confusion_matrix(pred, label, output_file=conf_mtx_output)
+    tdata, tlabel = next(test_data.mini_batches(batch_size=10000, process_nr=WORKER_NR))
+    pred, label = utils.validation(classifier, tdata, tlabel, usecuda=USECUDA)
+    with io.hdffile(os.path.join(training_settings["output_folder"], "performance.h5") , "a") as hdffile:
+      correct = np.count_nonzero(pred == label)
+      accuracy = correct / float(label.shape[0])
+      utils.update_hdf_by_slice(hdffile, "accuracy", np.array([accuracy], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
+    
+    if training_settings["dataset"] == "single":
+      print(f"Saving the confusion matrix to {conf_mtx_output} ...")
+      utils.confusion_matrix(pred, label, output_file=conf_mtx_output)
+    else: 
+      pass
+    scheduler.step()
+
+if __name__ == '__main__':
+  args = parse_args()
+  SETTINGS = vars(args)
+  _SETTINGS = json.dumps(vars(args), indent=2)
+  print("Settings of this training:")
+  print(_SETTINGS)
+
+  with open(os.path.join(SETTINGS["output_folder"], "settings.json"), "w") as f:
+    f.write(_SETTINGS)
+  
+  perform_training(SETTINGS)
+
 
 

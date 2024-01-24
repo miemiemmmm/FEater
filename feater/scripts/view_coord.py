@@ -194,7 +194,7 @@ def main_render(inputfile:str, index:int, args):
   # Main rendering functions
   vis = o3d.visualization.Visualizer()
   vis.create_window(window_name="HDF Coordinate viewer", width=1500, height=1500)
-
+  top_key = ""
   if args.topology:
     if not os.path.exists(args.topology):
       raise ValueError(f"Topology file {args.topology} does not exist")
@@ -209,18 +209,29 @@ def main_render(inputfile:str, index:int, args):
         raise ValueError(f"Cannot find the topology {top_key} in the HDF file")
       top = hdf.get_top(top_key)
       print(f"Res topology {top_key}, start{hdf['coord_starts'][index]}, end{hdf['coord_ends'][index]}")
+    print(top, coordi.shape)
     traj = Trajectory(top=top, xyz=np.array([coordi]))
     geoms_coord = view_obj.traj_to_o3d(traj)
     for geom in geoms_coord:
       vis.add_geometry(geom)
     
   else: 
-    coordi, colors, dims = get_info_coordi(inputfile, index)
-    geoms_coord = get_geo_coordi(coordi)
-    for geo, color in zip(geoms_coord, colors):
-      geo.paint_uniform_color(color)
-      geo.compute_vertex_normals()
-      vis.add_geometry(geo)
+    if args.representation == "pcd": 
+      coordi, colors, dims = get_info_coordi(inputfile, index)
+      for idx in range(coordi.shape[0]):
+        boxi = o3d.geometry.TriangleMesh.create_sphere(radius=0.2)
+        boxi.translate(coordi[idx])
+        boxi.paint_uniform_color([0.5,0.5,0.5])
+        boxi.compute_vertex_normals()
+        vis.add_geometry(boxi)
+
+    else:
+      coordi, colors, dims = get_info_coordi(inputfile, index)
+      geoms_coord = get_geo_coordi(coordi)
+      for geo, color in zip(geoms_coord, colors):
+        geo.paint_uniform_color(color)
+        geo.compute_vertex_normals()
+        vis.add_geometry(geo)
 
   # Add the bounding box
   if args.box:
@@ -243,11 +254,14 @@ def main_render(inputfile:str, index:int, args):
     vis.run()
   else:
     time.sleep(0.1)
-  out_prefix = os.path.basename(inputfile).split(".")[0]+f"{index:04d}"
+  if args.topology:
+    out_prefix = os.path.basename(inputfile).split(".")[0]+top_key+f"{index:04d}"
+  else: 
+    out_prefix = os.path.basename(inputfile).split(".")[0]+f"{index:04d}"
   print(f"Saving the image to {out_prefix}.png")
   if args.save_fig:
     vis.capture_screen_image(f"{out_prefix}.png", True)
-    vis.capture_depth_image(f"{out_prefix}_depth.png", True)
+    # vis.capture_depth_image(f"{out_prefix}_depth.png", True)
   vis.destroy_window()
 
 def parse_args():
@@ -261,6 +275,7 @@ def parse_args():
   parser.add_argument("-t", "--topology", type=int, default=0, help="The topology file (optional)")
   parser.add_argument("-s", "--save_fig", type=int, default=0, help="Save the figure. Default: 0")
   parser.add_argument("--stuck", type=int, default=1, help="Stuck the viewer. Default: 1")
+  parser.add_argument("--representation", type=str, default="mesh", help="The representation of the molecule. Default: stick")
   args = parser.parse_args()
   if args.fileinput is None:
     raise ValueError("Input file is not specified")

@@ -78,18 +78,8 @@ class BaseDataset(data.Dataset):
     self.start_map = np.zeros(self.total_entries, dtype=np.uint64)
     self.end_map = np.zeros(self.total_entries, dtype=np.uint64)
 
-    with io.hdffile(hdffiles[0], "r") as h5file:
-      h5file.draw_structure()
-
   def __len__(self):
     return self.total_entries
-
-  # def __del__(self): 
-  #   # Set the arrays to size 0
-  #   self.position_map.resize(0)
-  #   self.file_map.resize(0)
-  #   self.start_map.resize(0)
-  #   self.end_map.resize(0)
   
   def __iter__(self):
     for i in range(self.total_entries):
@@ -119,15 +109,19 @@ class BaseDataset(data.Dataset):
     return ()
 
   # @profile
-  def mini_batches(self, batch_size=512, shuffle=True, process_nr=24):
+  def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, v=0):
     pool = mp.Pool(process_nr)
     indices = np.arange(self.total_entries)
     if shuffle:
       np.random.shuffle(indices)
+    st = time.perf_counter()
     batches = split_array(indices, batch_size)
     for batch_idx, batch in enumerate(batches): 
       tasks = [self.mini_batch_task(i) for i in batch]
       ret_data = pool.starmap(readdata, tasks)
+      if v: 
+        print(f"HERE processing {batch_idx} batch of {len(batches)} batches, time: {time.perf_counter() - st:8.2f}")
+        st = time.perf_counter()
       _shape = [i.shape for i in ret_data]
       _shape = tuple(np.max(_shape, axis=0))
       data_numpy = np.zeros((len(ret_data), *_shape), dtype=np.float32)
@@ -243,32 +237,22 @@ class CoordDataset(BaseDataset):
 class VoxelDataset(BaseDataset):
   def __init__(self, hdffiles:list):
     super().__init__(hdffiles)
-
     # Generate the map for __getitem__ method to correctly locate the data from a set of HDF5 files
     global_ind = 0
     for fidx, file in enumerate(self.hdffiles):
       with io.hdffile(file, "r") as h5file:
-        self.shape = np.array(h5file["shape"], dtype=np.uint32)
+        self.shape = np.array(h5file["dimensions"], dtype=np.uint32)
         entry_nr_i = h5file["label"].shape[0]
-        size_0 = h5file["shape"][0]
-        starts = np.arange(entry_nr_i) * size_0
-        ends = starts + size_0
-        if ends[-1] != h5file["voxel"].shape[0]:
-          raise ValueError(f"Unmatched array end indices: {ends[-1]} vs {h5file['voxel'].shape[0]}")
       self.position_map[global_ind:global_ind+entry_nr_i] = np.arange(entry_nr_i)
       self.file_map[global_ind: global_ind + entry_nr_i] = fidx
-      self.start_map[global_ind:global_ind+entry_nr_i] = starts
-      self.end_map[global_ind:global_ind+entry_nr_i] = ends
       global_ind += entry_nr_i
 
   def __getitem__(self, index):
     # Get the file
     if index >= self.total_entries:
       raise IndexError(f"Index {index} is out of range. The dataset has {self.total_entries} entries.")
-    
     data = readdata(*self.mini_batch_task(index))
     label = readlabel(self.get_file(index), self.get_position(index))
-
     # Add the bracket to represent there is one channel
     data = np.array([data], dtype=np.float32)
     label = np.array(label, dtype=np.int64)
@@ -277,13 +261,13 @@ class VoxelDataset(BaseDataset):
     return data, label
   
   def mini_batch_task(self, index):
-    return (self.get_file(index), "voxel", self.get_slice(index))
+    return (self.get_file(index), "voxel", np.s_[index])
 
   def __len__(self):
     return self.total_entries
 
-  def mini_batches(self, batch_size=512, shuffle=True, process_nr=24):
-    for data, label in super().mini_batches(batch_size=batch_size, shuffle=shuffle, process_nr=process_nr): 
+  def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, **kwargs):
+    for data, label in super().mini_batches(batch_size=batch_size, shuffle=shuffle, process_nr=process_nr, **kwargs): 
       data = data[:, np.newaxis, ...]
       yield data, label
 
