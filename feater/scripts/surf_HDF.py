@@ -131,21 +131,6 @@ def make_hdf(inputhdf:str, outputhdf:str, interp_settings:dict):
     face_st_buffer = face_ed_buffer - len_faces
     xyzr_ed_buffer = np.cumsum([_r[2].shape[0] for _r in results], dtype=np.uint64) + idx_xyzr
     xyzr_st_buffer = xyzr_ed_buffer - len_xyzr
-
-    # with io.hdffile(outputhdf, "r") as f: 
-    #   print(f"Label from {batches_cumsum[idx]}, {batches_cumsum[idx]+len(batch)}")
-    #   if "vert_starts" in f.keys():
-    #     print(idx_vert, " ==== " , batches_cumsum[idx])
-    #     if idx_vert != f["vert_ends"][batches_cumsum[idx]-1]:
-    #       print(f"Mismatched vert_ends: {idx_vert} vs {f['vert_ends'][batches_cumsum[idx]-1]}")
-    #       exit(0)
-    #     else: 
-    #       print(f"Matched: {idx_vert} vs {f['vert_ends'][batches_cumsum[idx]-1]}")
-          # print(f"Put the slice to {idx_vert} -> {vert_ed_buffer[-1]}")
-          # print(f"Put the slice to {vert_st_buffer[0]} -> {vert_ed_buffer[-1]}")
-      # print("natural", f["vert_ends"].shape[0])
-      # print("analytical", batches_cumsum[idx])
-    # exit(0)
     
     # Prepare the slices for the HDF5 update 
     vert_slice = np.s_[idx_vert:idx_vert+np.uint64(len(vertex_buffer))]

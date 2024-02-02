@@ -13,7 +13,7 @@ import torchvision.models
 from feater import io, utils, dataloader
 
 
-def get_resnet_model(resnettype: str):
+def get_resnet_model(resnettype: str, class_nr:int):
   FCFeatureNumberMap = {"resnet18": 512, "resnet34": 512, "resnet50": 2048, "resnet101": 2048,  "resnet152": 2048}
   resnettype = resnettype.lower()
   if resnettype == "resnet18":
@@ -30,7 +30,7 @@ def get_resnet_model(resnettype: str):
     raise ValueError(f"Unsupported ResNet type: {resnettype}")
   fc_number = FCFeatureNumberMap.get(resnettype, 2048)
   model.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3)
-  model.fc = nn.Linear(fc_number, 20)
+  model.fc = nn.Linear(fc_number, class_nr)
   return model
 
 
@@ -68,15 +68,20 @@ def perform_training(training_settings: dict):
   valid_data = dataloader.HilbertCurveDataset(validfiles)
   test_data = dataloader.HilbertCurveDataset(testfiles)
 
-  classifier = get_resnet_model(training_settings["resnet_type"])
+  if training_settings["dataset"] == "single":
+    class_nr = 20
+  elif training_settings["dataset"] == "dual":
+    class_nr = 400
+
+  classifier = get_resnet_model(training_settings["resnet_type"], class_nr)
   if training_settings["pretrained"] and len(training_settings["pretrained"]) > 0:
     classifier.load_state_dict(torch.load(training_settings["pretrained"]))
   if USECUDA:
     classifier.cuda()
 
   optimizer = optim.Adam(classifier.parameters(), lr=training_settings["learning_rate"], betas=(0.9, 0.999))
-  criterion = nn.CrossEntropyLoss()
-  scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1, verbose = True)
+  criterion = nn.CrossEntropyLoss(label_smoothing=0.5)
+  scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.4, verbose = True)
 
   print(f"Number of parameters: {sum([p.numel() for p in classifier.parameters()])}")
   START_EPOCH = training_settings["start_epoch"]
@@ -93,32 +98,36 @@ def perform_training(training_settings: dict):
       # if (batch_idx+1) % 500 == 0:   # TODO: Remove this line when production
       #   break
       train_data, train_label = batch
-      # print(train_data.shape, train_label.shape)
       
       if USECUDA:
         train_data, train_label = train_data.cuda(), train_label.cuda()
       optimizer.zero_grad()
       classifier = classifier.train()
+      
       pred = classifier(train_data)
+
       loss = criterion(pred, train_label)
       loss.backward()
       optimizer.step()
-      accuracy = utils.report_accuracy(pred, train_label, verbose=False)
-      
-      print(f"Processing the block {batch_idx:>5d}/{batch_nr:<5d}; Loss: {loss.item():8.4f}; Accuracy: {accuracy:8.4f}")
+
+      if batch_idx % 50 == 0:
+        accuracy = utils.report_accuracy(pred, train_label, verbose=False)
+        print(f"Processing the block {batch_idx:>5d}/{batch_nr:<5d}; Loss: {loss.item():8.4f}; Accuracy: {accuracy:8.4f}")
+
       if (batch_idx + 1) % INTERVAL == 0:
         if not os.path.exists(os.path.join(training_settings["output_folder"], "tmp_figs")):
           subprocess.call(["mkdir", "-p", os.path.join(training_settings["output_folder"], "tmp_figs")])
         vdata, vlabel = next(valid_data.mini_batches(batch_size=10000, process_nr=WORKER_NR))
         preds, labels = utils.validation(classifier, vdata, vlabel, usecuda=USECUDA)
         print(f"Estimated epoch time: {(time.perf_counter() - st) / (batch_idx + 1) * batch_nr:.2f} seconds")
-        print("#"*100)
-        print("Preds:")
-        utils.label_counts(preds)
-        print("Labels:")
-        utils.label_counts(labels)
-        print("#"*100)
-        utils.confusion_matrix(preds, labels, output_file=os.path.join(os.path.abspath(training_settings["output_folder"]), f"tmp_figs/idx_{epoch}_{batch_idx}.png"))
+        if training_settings["dataset"] == "single":
+          print("#"*100)
+          print("Preds:")
+          utils.label_counts(preds)
+          print("Labels:")
+          utils.label_counts(labels)
+          print("#"*100)
+          utils.confusion_matrix(preds, labels, output_file=os.path.join(os.path.abspath(training_settings["output_folder"]), f"tmp_figs/idx_{epoch}_{batch_idx}.png"))
     # Save the model
     modelfile_output = os.path.join(os.path.abspath(training_settings["output_folder"]), f"resnet_{epoch}.pth")
     conf_mtx_output  = os.path.join(os.path.abspath(training_settings["output_folder"]), f"resnet_confmatrix_{epoch}.png")

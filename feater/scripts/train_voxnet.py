@@ -87,8 +87,12 @@ def perform_training(training_settings: dict):
       loss = criterion(pred, train_label)
       loss.backward()
       optimizer.step()
-      accuracy = utils.report_accuracy(pred, train_label, verbose=False)
-      print(f"Processing the block {batch_idx:>5d}/{batch_nr:<5d}; Loss: {loss.item():8.4f}; Accuracy: {accuracy:8.4f}")
+
+      if (batch_idx) % 50 == 0:
+        # NOTE: Evaluating accuracy every batch will casue a significant slow down.
+        accuracy = utils.report_accuracy(pred, train_label, verbose=False)
+        print(f"Processing the block {batch_idx:>5d}/{batch_nr:<5d}; Loss: {loss.item():8.4f}; Accuracy: {accuracy:8.4f}")
+      
       if (batch_idx + 1) % INTERVAL == 0:
         vdata, vlabel = next(valid_data.mini_batches(batch_size=10000, process_nr=WORKER_NR))
         utils.validation(classifier, vdata, vlabel, usecuda=USECUDA)

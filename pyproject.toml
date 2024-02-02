@@ -20,8 +20,13 @@ include-package-data = true
 
 
 [project.entry-points.console_scripts]
-fixres = "feater.scripts.fix_residue:run_resfixer"
-pdbprocess = "feater.scripts.process_pdb:run_pdbprocess"
-pdb2hdf = "feater.scripts.make_HDF:console_interface"
-pdb2nc = "feater.scripts.make_NetCDF:console_interface"
+viewcoord = "feater.scripts.view_coord:console_interface"
+viewsurf = "feater.scripts.view_surf:console_interface"
+viewvoxel = "feater.scripts.view_voxel:console_interface"
+
+# viewhilb = "feater.scripts.view_voxel:"
+# fixres = "feater.scripts.fix_residue:run_resfixer"
+# pdbprocess = "feater.scripts.process_pdb:run_pdbprocess"
+# pdb2hdf = "feater.scripts.make_HDF:console_interface"
+# pdb2nc = "feater.scripts.make_NetCDF:console_interface"
 

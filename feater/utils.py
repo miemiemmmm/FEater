@@ -31,15 +31,11 @@ def add_data_to_hdf(hdffile, dataset_name:str, data:ndarray, **kwargs):
 
 def update_hdf_by_slice(hdffile, dataset_name:str, data:ndarray, hdf_slice, **kwargs):
   if dataset_name not in hdffile.keys():
-    hdffile.create_dataset(dataset_name, data=data, **kwargs)
+      hdffile.create_dataset(dataset_name, data=data, **kwargs)
   else:
     if hdf_slice.stop > hdffile[dataset_name].shape[0]: 
       hdffile[dataset_name].resize(hdf_slice.stop, axis=0)
     hdffile[dataset_name][hdf_slice] = data
-
-
-def h5files_to_dataloader(filelist:list):
-  pass
 
 
 def report_accuracy(pred, label, verbose=True):
@@ -57,28 +53,29 @@ def validation(classifier, valid_data, valid_label, usecuda=True, batch_size=50)
   valid_label_batches = torch.split(valid_label, batch_size, dim=0)
   ret_pred = []
   ret_label = []
-  for val_data, val_label in zip(valid_data_batches, valid_label_batches):
-    if usecuda:
-      val_data, val_label = val_data.cuda(), val_label.cuda()
-    ret = classifier(val_data)
+  with torch.no_grad():
+    for val_data, val_label in zip(valid_data_batches, valid_label_batches):
+      if usecuda:
+        val_data, val_label = val_data.cuda(), val_label.cuda()
+      ret = classifier(val_data)
 
-    if isinstance(ret, Tensor):
-      # Default model which returns the predicted results
-      pred_choice = ret
-    elif isinstance(ret, tuple):
-      # Customized model which returns a tuple rather than the predicted results
-      pred_choice = ret[0]
-    else:
-      raise ValueError(f"Unexpected return type {type(ret)}")
-    loss = F.cross_entropy(pred_choice, val_label)
-    accuracy = report_accuracy(pred_choice, val_label, verbose=False)
-    print(f">>> Validation loss: {loss.item():8.4f} | Validation accuracy: {accuracy:8.4f}")
+      if isinstance(ret, Tensor):
+        # Default model which returns the predicted results
+        pred_choice = ret
+      elif isinstance(ret, tuple):
+        # Customized model which returns a tuple rather than the predicted results
+        pred_choice = ret[0]
+      else:
+        raise ValueError(f"Unexpected return type {type(ret)}")
+      loss = F.cross_entropy(pred_choice, val_label)
+      accuracy = report_accuracy(pred_choice, val_label, verbose=False)
+      print(f">>> Validation loss: {loss.item():8.4f} | Validation accuracy: {accuracy:8.4f}")
 
-    pred_choice = pred_choice.data.max(1)[1]
-    pred = pred_choice.cpu().tolist()
-    label = val_label.cpu().tolist()
-    ret_pred += pred
-    ret_label += label
+      pred_choice = pred_choice.data.max(1)[1]
+      pred = pred_choice.cpu().tolist()
+      label = val_label.cpu().tolist()
+      ret_pred += pred
+      ret_label += label
   ret_pred = np.array(ret_pred)
   ret_label = np.array(ret_label)
   return ret_pred, ret_label

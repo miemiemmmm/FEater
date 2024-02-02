@@ -109,7 +109,7 @@ class BaseDataset(data.Dataset):
     return ()
 
   # @profile
-  def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, v=0):
+  def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, v=0, **kwargs):
     pool = mp.Pool(process_nr)
     indices = np.arange(self.total_entries)
     if shuffle:
@@ -117,6 +117,11 @@ class BaseDataset(data.Dataset):
     st = time.perf_counter()
     batches = split_array(indices, batch_size)
     for batch_idx, batch in enumerate(batches): 
+      print(kwargs, batch_idx, batch_idx < kwargs.get("end_batch"))
+      if batch_idx < kwargs.get("start_batch", 0): 
+        continue
+      elif batch_idx > kwargs.get("end_batch", len(batches)):
+        break
       tasks = [self.mini_batch_task(i) for i in batch]
       ret_data = pool.starmap(readdata, tasks)
       if v: 
@@ -192,6 +197,9 @@ class CoordDataset(BaseDataset):
   def mini_batch_task(self, index): 
     return (self.get_file(index), "coordinates", self.get_slice(index))
 
+  def mini_batches_(self, batch_size=512, shuffle=False, process_nr=24, **kwargs):
+    for data, label in super().mini_batches(batch_size=batch_size, shuffle=shuffle, process_nr=process_nr, **kwargs): 
+      yield data, label
   
   def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, **kwargs):
     for data, label in super().mini_batches(batch_size=batch_size, shuffle=shuffle, process_nr=process_nr, **kwargs): 
