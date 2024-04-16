@@ -57,6 +57,7 @@ def get_elemi(hdf, index:int) -> np.ndarray:
   return retcolor
 
 def get_voxeli(hdf, index:int) -> np.ndarray:
+  
   dims = np.asarray(hdf["shape"])
   index_st  = index * dims
   index_end = index_st + dims
@@ -64,12 +65,14 @@ def get_voxeli(hdf, index:int) -> np.ndarray:
   return voxeli
 
 
-def get_geo_voxeli(voxel, cmap="inferno", percentile=95, hide=1) -> list:
+def get_geo_voxeli(voxel, cmap="inferno", percentile=95, hide=1, scale_factor=[1,1,1]) -> list:
   dims = np.asarray(voxel.shape)
   cmap = colormaps.get_cmap(cmap)
   vmax = np.max(voxel)
-  if hide: # Hide the zero voxels
-    mask = (voxel - 1e-6) > 0  # Empty voxels are not shown in the visualization
+  # Hide the zero voxels
+  # Empty voxels are not shown in the visualization
+  if hide: 
+    mask = (voxel - 1e-6) > 0 
     vcutoff = np.percentile(voxel[mask], percentile)
   else:
     vcutoff = np.percentile(voxel, percentile)
@@ -80,7 +83,8 @@ def get_geo_voxeli(voxel, cmap="inferno", percentile=95, hide=1) -> list:
         if voxel[x,y,z] < vcutoff:
           continue
         box = o3d.geometry.TriangleMesh.create_box(width=0.2, height=0.2, depth=0.2)
-        box.translate(np.asarray([x,y,z], dtype=np.float64))
+        # box.translate(np.asarray([x,y,z], dtype=np.float64))
+        box.translate(np.asarray([x * scale_factor[0], y * scale_factor[1], z * scale_factor[2]], dtype=np.float64))
         color = cmap(voxel[x,y,z]/vmax)[:3]
         box.paint_uniform_color(color)
         ret.append(box)
@@ -96,7 +100,8 @@ def get_geo_coordi(coordi) -> list:
   return ret
 
 
-def add_bounding_box(dims):  # TODO: Already put this to the SiESTA
+# TODO: Already put this to the SiESTA
+def add_bounding_box(dims): 
   boxpoints = np.array([
     [0,0,0],
     [dims[0],0,0],
@@ -136,6 +141,7 @@ def main_render(inputfile:str, index:int, args):
     scale_factor = boxsize / dims
   print(f"Residue {constants.LAB2RES_DUAL[labeli]} ; Reading took: {time.perf_counter() - st:6.2f}s")
   print("Reading the coordinate")
+  print(f"The scale factor is {scale_factor}")
   # Reading the reference file
   if args.reference:
     with io.hdffile(args.reference, "r") as hdf:  
@@ -143,9 +149,10 @@ def main_render(inputfile:str, index:int, args):
       top = hdf.get_top(hdf["topology_key"][index])
       traj = Trajectory(top=top, xyz=np.array([coordi]))
 
-      coord_t = coordi / scale_factor
+      # coord_t = coordi / scale_factor
+      coord_t = coordi 
       coord_cog = np.mean(coord_t, axis=0)
-      diff = coord_cog - np.asarray([16, 16, 16])
+      diff = coord_cog - np.asarray([8, 8, 8])
       coord_t -= diff
       traj.xyz[0] = coord_t
       geoms_coord = view_obj.traj_to_o3d(traj)
@@ -154,30 +161,29 @@ def main_render(inputfile:str, index:int, args):
   print(f"Coodinate reading took {time.perf_counter() - st:6.2f}s")
   # Main rendering functions
   vis = o3d.visualization.Visualizer()
-  vis.create_window(window_name="HDF viewer", width=1500, height=1500)
+  vis.create_window(window_name="HDF viewer", width=600, height=600)
 
-  geoms_voxel = get_geo_voxeli(voxeli, cmap=args.cmap, percentile=args.percentile, hide=args.hide)
+  geoms_voxel = get_geo_voxeli(voxeli, cmap=args.cmap, percentile=args.percentile, hide=args.hide, scale_factor=scale_factor)
   for geo in geoms_voxel:
     vis.add_geometry(geo)
 
   # geoms_coord = get_geo_coordi(coordi - diff)
-
   # for geo, color in zip(geoms_coord, colors):
   #   geo.paint_uniform_color(color)
-  #   geo.compute_vertex_normals()
   #   vis.add_geometry(geo)
   for geo in geoms_coord:
+    geo.compute_vertex_normals()
     vis.add_geometry(geo)
 
   if args.boundingbox:
-    geoms_box = view_obj.create_bounding_box(dims)
+    geoms_box = view_obj.create_bounding_box(dims * scale_factor)
     for geo in geoms_box:
       vis.add_geometry(geo)
 
   # Mark the center of the voxel
   if args.markcenter:
     sphere = o3d.geometry.TriangleMesh.create_sphere(radius=1)
-    sphere.translate(np.asarray(dims)/2)
+    sphere.translate(np.asarray(dims * scale_factor)/2)
     sphere.paint_uniform_color([0, 1, 0])
     vis.add_geometry(sphere)
 
@@ -185,6 +191,24 @@ def main_render(inputfile:str, index:int, args):
   vis.update_renderer()
   vis.run()
   vis.destroy_window()
+  # Save the objects to a ply object file 
+
+  final_obj = o3d.geometry.TriangleMesh()
+  for geo in geoms_voxel:
+    geo.compute_vertex_normals()
+    final_obj += geo
+  for geo in geoms_coord:
+    geo.compute_vertex_normals()
+    final_obj += geo
+  if args.boundingbox:
+    for geo in geoms_box:
+      geo.compute_vertex_normals()
+      final_obj += geo
+  o3d.io.write_triangle_mesh("/home/yzhang/Desktop/test.ply", 
+                             final_obj,
+                             write_ascii=True,
+                             write_vertex_normals=True, 
+                             write_vertex_colors=True )
 
 def parse_args():
   parser = argparse.ArgumentParser()

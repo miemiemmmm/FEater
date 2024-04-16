@@ -11,7 +11,3 @@ runpdb:
 compile:
 		cd src && make voxelize.so
 
-
-
-
-

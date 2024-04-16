@@ -54,7 +54,6 @@ def make_hdf(inputhdf:str, outputhdf:str, interp_settings:dict):
         del f["size"]
       utils.add_data_to_hdf(f, "size", np.array([len_2d, len_2d], dtype=np.int32), dtype=np.int32, maxshape=[2])
   
-  
   print(f"3D Hilbert curve has {len(coord_3d)} points, 2D Hilbert curve has {len(coord_2d)} points")
 
   # Make up the process pool

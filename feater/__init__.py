@@ -1,6 +1,6 @@
 from . import io
-from . import chem
 from . import scripts
+from . import utils
 from .constants import *
 # No automatic import of models. Use them explicitly.
 

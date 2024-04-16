@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from feater.models.pointnet import PointNetCls
-from feater import io, constants, dataloader, utils
+from feater import io, dataloader, utils
 
 
 def parse_args():
@@ -40,7 +40,6 @@ def parse_args():
     raise ValueError(f"Unexpected dataset {args.dataset}; Only single (FEater-Single) and dual (FEater-Dual) are supported")
   
   args.training_data = os.path.abspath(args.training_data)
-  args.validation_data = os.path.abspath(args.validation_data)
   args.test_data = os.path.abspath(args.test_data)
   args.output_folder = os.path.abspath(args.output_folder)
   return args
@@ -53,19 +52,15 @@ def perform_training(training_settings: dict):
   torch.manual_seed(training_settings["seed"])
   np.random.seed(training_settings["seed"])
 
-
   st = time.perf_counter()
   # Load the datasets
   trainingfiles = utils.checkfiles(training_settings["training_data"])
-  validfiles = utils.checkfiles(training_settings["validation_data"])
   testfiles = utils.checkfiles(training_settings["test_data"])
   if training_settings["date_type"] == "coord":
     training_data = dataloader.CoordDataset(trainingfiles, target_np=training_settings["n_points"])
-    valid_data = dataloader.CoordDataset(validfiles, target_np=training_settings["n_points"])
     test_data = dataloader.CoordDataset(testfiles, target_np=training_settings["n_points"])
   elif training_settings["date_type"] == "surf":
     training_data = dataloader.SurfDataset(trainingfiles, target_np=training_settings["n_points"])
-    valid_data = dataloader.SurfDataset(validfiles, target_np=training_settings["n_points"])
     test_data = dataloader.SurfDataset(testfiles, target_np=training_settings["n_points"])
     
 
@@ -85,17 +80,13 @@ def perform_training(training_settings: dict):
   START_EPOCH = training_settings["start_epoch"]
   EPOCH_NR = training_settings["epochs"]
   BATCH_SIZE = training_settings["batch_size"]
-  INTERVAL = training_settings["interval"]
   WORKER_NR = training_settings["data_workers"]
   for epoch in range(START_EPOCH, EPOCH_NR):
     st = time.perf_counter()
     message = f" Running the epoch {epoch:>4d}/{EPOCH_NR:<4d} at {time.ctime()} "
     print(f"{message:#^80}")
-    batch_nr = (len(training_data) + BATCH_SIZE - 1) // BATCH_SIZE
 
     for batch_idx, batch in enumerate(training_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR)):
-      # if (batch_idx+1) % 300 == 0:   # TODO: Remove this line when production
-      #   break
       train_data, train_label = batch
       train_data = train_data.transpose(2, 1)  # Important: Move the coordinate's 3 dim as channels of the data
       if USECUDA:
@@ -103,46 +94,57 @@ def perform_training(training_settings: dict):
 
       optimizer.zero_grad()
       classifier = classifier.train()
-      pred, trans, trans_feat = classifier(train_data)
+      pred, _, _ = classifier(train_data)
       loss = criterion(pred, train_label)
       loss.backward()
       optimizer.step()
-      accuracy = utils.report_accuracy(pred, train_label, verbose=False)
-      print(f"Processing the block {batch_idx:>5d}/{batch_nr:<5d}; Loss: {loss.item():8.4f}; Accuracy: {accuracy:8.4f}")
 
-      if (batch_idx + 1) % INTERVAL == 0:
-        vdata, vlabel = next(valid_data.mini_batches(batch_size=10000, process_nr=WORKER_NR))
-        vdata = vdata.transpose(2, 1)
-        utils.validation(classifier, vdata, vlabel, usecuda=USECUDA)
-        print(f"Estimated epoch time: {(time.perf_counter() - st) / (batch_idx + 1) * batch_nr:.2f} seconds")
-    
+    _loss_test_cache = []
+    _loss_train_cache = []
+    _accuracy_test_cache = []
+    _accuracy_train_cache = []
+    with torch.no_grad(): 
+      for (trdata, trlabel) in training_data.mini_batches(batch_size=1000, process_nr=WORKER_NR):
+        trdata = trdata.transpose(2, 1)
+        if USECUDA:
+          trdata, trlabel = trdata.cuda(), trlabel.cuda()
+        pred, _, _ = classifier(trdata)
+        pred_choice = pred.data.max(1)[1]
+        correct = pred_choice.eq(trlabel.data).cpu().sum()
+        tr_accuracy = correct.item() / float(trlabel.size()[0])
+        tr_loss = criterion(pred, trlabel)
+        _loss_train_cache.append(tr_loss.item())
+        _accuracy_train_cache.append(tr_accuracy)
+        if len(_loss_train_cache) == 8:
+          break
+
+      for (tedata, telabel) in test_data.mini_batches(batch_size=1000, process_nr=WORKER_NR):
+        tedata = tedata.transpose(2, 1)
+        if USECUDA:
+          tedata, telabel = tedata.cuda(), telabel.cuda()
+        pred, _, _ = classifier(tedata)
+        pred_choice = pred.data.max(1)[1]
+        correct = pred_choice.eq(telabel.data).cpu().sum()
+        te_accuracy = correct.item() / float(telabel.size()[0])
+        te_loss = criterion(pred, telabel)
+        _loss_test_cache.append(te_loss.item())
+        _accuracy_test_cache.append(te_accuracy)
+        if len(_loss_test_cache) == 8:
+          break
+
     scheduler.step()
     
     # Save the model
     modelfile_output = os.path.join(os.path.abspath(training_settings["output_folder"]), f"pointnet_coord_{epoch}.pth")
-    conf_mtx_output  = os.path.join(os.path.abspath(training_settings["output_folder"]), f"pointnet_confmatrix_{epoch}.png")
     print(f"Saving the model to {modelfile_output} ...")
     torch.save(classifier.state_dict(), modelfile_output)
-    print(f"Performing the prediction on the test set ...")
-    tdata, tlabel = next(test_data.mini_batches(batch_size=10000, process_nr=WORKER_NR))
-    tdata = tdata.transpose(2, 1)
-    pred, label = utils.validation(classifier, tdata, tlabel, usecuda=USECUDA)
-    with io.hdffile(os.path.join(training_settings["output_folder"], "performance.h5") , "a") as hdffile:
-      correct = np.count_nonzero(pred == label)
-      accuracy = correct / float(label.shape[0])
-      utils.update_hdf_by_slice(hdffile, "accuracy", np.array([accuracy], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
-    
-    if training_settings["dataset"] == "single":
-      print(f"Saving the confusion matrix to {conf_mtx_output} ...")
-      utils.confusion_matrix(pred, label, output_file=conf_mtx_output)
-    else: 
-      pass
-      # matrix = 
-      # utils.plot_matrix()
-
     message = f" Training of the epoch {epoch:>4d}/{EPOCH_NR:<4d} took {time.perf_counter() - st:6.2f} seconds "
-    print(f"{message:^^80}")
-
+    
+    with io.hdffile(os.path.join(training_settings["output_folder"], "performance.h5") , "a") as hdffile:
+      utils.update_hdf_by_slice(hdffile, "loss_train", np.array([np.mean(_loss_train_cache)], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
+      utils.update_hdf_by_slice(hdffile, "loss_test", np.array([np.mean(_loss_test_cache)], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
+      utils.update_hdf_by_slice(hdffile, "accuracy_train", np.array([np.mean(_accuracy_train_cache)], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
+      utils.update_hdf_by_slice(hdffile, "accuracy_test", np.array([np.mean(_accuracy_test_cache)], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
 
 if __name__ == "__main__":
   args = parse_args()
@@ -155,69 +157,3 @@ if __name__ == "__main__":
     f.write(_SETTINGS)
 
   perform_training(SETTINGS)
-
-
-  # st = time.perf_counter()
-  # trainingfiles = utils.checkfiles(TRAIN_DATA)
-  # training_data = dataloader.CoordDataset(trainingfiles)
-  # validfiles = utils.checkfiles(VALID_DATA)
-  # valid_data = dataloader.CoordDataset(validfiles)
-  # testfiles = utils.checkfiles(TEST_DATA)
-  # test_data = dataloader.CoordDataset(testfiles)
-
-
-  # classifier = PointNetCls(k=20, feature_transform=False)
-  # if LOAD_MODEL and len(LOAD_MODEL) > 0:
-  #   classifier.load_state_dict(torch.load(LOAD_MODEL))
-  # optimizer = optim.Adam(classifier.parameters(), lr=LEARNING_RATE, betas=(0.9, 0.999))
-  # criterion = nn.CrossEntropyLoss()
-  # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.5)
-  # if USECUDA:
-  #   classifier.cuda()
-
-  # print(f"Number of parameters: {sum([p.numel() for p in classifier.parameters()])}")
-
-  # # Check if the dataloader could successfully load the data
-  # for epoch in range(START_EPOCH, EPOCH_NR):
-  #   print("#" * 80)
-  #   print(f"Running the epoch {epoch}/{EPOCH_NR}")
-  #   st = time.perf_counter()
-  #   batch_nr = (len(training_data) + BATCH_SIZE - 1) // BATCH_SIZE
-  #   for batch_idx, batch in enumerate(training_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR)):
-  #     train_data, train_label = batch
-  #     train_data = train_data.transpose(2, 1)  # Important: Move the coordinate's 3 dim as channels of the data
-  #     if USECUDA:
-  #       train_data, train_label = train_data.cuda(), train_label.cuda()
-
-  #     optimizer.zero_grad()
-  #     classifier = classifier.train()
-  #     pred, trans, trans_feat = classifier(train_data)
-  #     loss = criterion(pred, train_label)
-  #     loss.backward()
-  #     optimizer.step()
-  #     accuracy = utils.report_accuracy(pred, train_label, verbose=False)
-  #     print(f"Processing the block {batch_idx}/{batch_nr}; Loss: {loss.item():8.4f}; Accuracy: {accuracy:8.4f}")
-
-  #     if VERBOSE:
-  #       utils.label_counts(train_label)
-
-  #     if ((batch_idx + 1) % INTERVAL) == 0:
-  #       vdata, vlabel = next(valid_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR))
-  #       vdata = vdata.transpose(2, 1)
-  #       utils.validation(classifier, vdata, vlabel, usecuda=USECUDA, batch_size=BATCH_SIZE, process_nr=WORKER_NR)
-
-  #   scheduler.step()
-  #   print(f"Epoch {epoch} takes {time.perf_counter() - st:.2f} seconds")
-  #   print("^" * 80)
-    
-  #   # Save the model
-  #   modelfile_output = os.path.join(os.path.abspath(OUTPUT_DIR), f"pointnet_coord_{epoch}.pth")
-  #   conf_mtx_output  = os.path.join(os.path.abspath(OUTPUT_DIR), f"pointnet_confmatrix_{epoch}.png")
-  #   print(f"Saving the model to {modelfile_output} ...")
-  #   torch.save(classifier.state_dict(), modelfile_output)
-  #   print(f"Performing the prediction on the test set ...")
-  #   pred, label = evaluation(classifier, test_data)
-  #   print(f"Saving the confusion matrix to {conf_mtx_output} ...")
-  #   utils.confusion_matrix(pred, label, output_file=conf_mtx_output)
-
-

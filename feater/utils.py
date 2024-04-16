@@ -172,7 +172,7 @@ def label_counts(train_label):
 def standard_parser(parser: argparse.ArgumentParser):
   # Data files
   parser.add_argument("-train", "--training_data", type=str, help="The file writes all of the absolute path of h5 files of training data set")
-  parser.add_argument("-valid", "--validation_data", type=str, help="The file writes all of the absolute path of h5 files of validation data set")
+  # parser.add_argument("-valid", "--validation_data", type=str, help="The file writes all of the absolute path of h5 files of validation data set")
   parser.add_argument("-test", "--test_data", type=str, help="The file writes all of the absolute path of h5 files of test data set")
   parser.add_argument("-o", "--output_folder", type=str, default="cls", help="Output folder")
   
@@ -198,9 +198,9 @@ def parser_sanity_check(parser: argparse.ArgumentParser):
   if (not args.training_data) or (not os.path.exists(args.training_data)):
     parser.print_help()
     raise ValueError(f"The training data file {args.training_data} does not exist.")
-  if (not args.validation_data) or (not os.path.exists(args.validation_data)):
-    parser.print_help()
-    raise ValueError(f"The validation data file {args.validation_data} does not exist.")
+  # if (not args.validation_data) or (not os.path.exists(args.validation_data)):
+  #   parser.print_help()
+  #   raise ValueError(f"The validation data file {args.validation_data} does not exist.")
   if (not args.test_data) or (not os.path.exists(args.test_data)):
     parser.print_help()
     raise ValueError(f"The test data file {args.test_data} does not exist.")

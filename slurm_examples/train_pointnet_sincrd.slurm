@@ -1,53 +1,27 @@
 #!/bin/bash -l
 #SBATCH --job-name=PN_CRD_tp24   # NOTE: Job name and output/error files
-#SBATCH --output=/home/yzhang/Documents/FEater_Dataset/results/pointnet_coord_tp24_single/PN_CRD_tp24.out
-#SBATCH --error=/home/yzhang/Documents/FEater_Dataset/results/pointnet_coord_tp24_single/PN_CRD_tp24.err
+#SBATCH --output=/diskssd/yzhang/FEater_data/results_single_coord_miniset/PN_CRD_tp24.out
+#SBATCH --error=/diskssd/yzhang/FEater_data/results_single_coord_miniset/PN_CRD_tp24.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=10
 
 source /home/yzhang/mamba/bin/loadmamba
-micromamba activate mlenv
-
+micromamba activate pointnet_torch
 
 # NOTE: Set the correct path to your train.txt, valid.txt and test.txt and Output directory
 # Coord Single
-train_file="/home/yzhang/Documents/FEater_Dataset/FEater_Single_PDBHDF/train.txt"
-valid_file="/home/yzhang/Documents/FEater_Dataset/FEater_Single_PDBHDF/valid.txt"
-test_file="/home/yzhang/Documents/FEater_Dataset/FEater_Single_PDBHDF/test.txt"
-outdir="/home/yzhang/Documents/FEater_Dataset/results/pointnet_coord_tp24_single"
-
-
-# Surf single
-# train_file="/home/yzhang/Documents/FEater_Dataset/FEater_Single_SURF/train.txt"
-# valid_file="/home/yzhang/Documents/FEater_Dataset/FEater_Single_SURF/valid.txt"
-# test_file="/home/yzhang/Documents/FEater_Dataset/FEater_Single_SURF/test.txt"
-# outdir="/home/yzhang/Documents/FEater_Dataset/results/pointnet_surf_tp1500_single"
-
-
-# Coord Dual
-# train_file="/home/yzhang/Documents/FEater_Dataset/FEater_Dual_PDBHDF/train.txt"
-# valid_file="/home/yzhang/Documents/FEater_Dataset/FEater_Dual_PDBHDF/valid.txt"
-# test_file="/home/yzhang/Documents/FEater_Dataset/FEater_Dual_PDBHDF/test.txt"
-# outdir="/home/yzhang/Documents/FEater_Dataset/results/pointnet_coord_tp42_dual"
-
-
-# Surf Dual
-# train_file="/home/yzhang/Documents/FEater_Dataset/FEater_Dual_SURF/train.txt"
-# valid_file="/home/yzhang/Documents/FEater_Dataset/FEater_Dual_SURF/valid.txt"
-# test_file="/home/yzhang/Documents/FEater_Dataset/FEater_Dual_SURF/test.txt"
-# outdir="/home/yzhang/Documents/FEater_Dataset/results/pointnet_surf_tp2000_dual
-
-
-mkdir -p ${outdir}
+train_file="/Weiss/FEater_Data/FEater_Minisets/tr_single_coord.txt"
+test_file="/Weiss/FEater_Single_PDBHDF/te.txt"
+outdir="/diskssd/yzhang/FEater_data/results_single_coord_miniset"
 
 
 pretrained_model=""
 start_epoch=0
 
-total_epoch=36
+total_epoch=200
 batch_size=256
-worker_nr=24
+worker_nr=12
 
 target_point_nr=24   				# NOTE IMPORTANT
 data_type="coord"							# NOTE IMPORTANT
@@ -59,7 +33,6 @@ echo "Task starts at $(date +%Y-%m-%d-%H:%M:%S)"
 python3 /MieT5/MyRepos/FEater/feater/scripts/train_pointnet.py \
 	-train  ${train_file} \
 	-test   ${test_file} \
-	-valid  ${valid_file} \
 	-o ${outdir} \
 	\
 	--start_epoch ${start_epoch} \

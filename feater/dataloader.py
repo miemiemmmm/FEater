@@ -117,7 +117,7 @@ class BaseDataset(data.Dataset):
     st = time.perf_counter()
     batches = split_array(indices, batch_size)
     for batch_idx, batch in enumerate(batches): 
-      print(kwargs, batch_idx, batch_idx < kwargs.get("end_batch"))
+      # print(kwargs, batch_idx, batch_idx < kwargs.get("end_batch"))
       if batch_idx < kwargs.get("start_batch", 0): 
         continue
       elif batch_idx > kwargs.get("end_batch", len(batches)):

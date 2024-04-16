@@ -3,7 +3,7 @@ FEater (Flexibility and Elasticity Assessment Tools for Essential Residues) prop
 <!-- This challenge focused on the performance evaluation of 
 models to flexible and elastic objects.  -->
 
-## Package insstallation
+## Installation
 ### Compile from source
 ```
 micromamba activate env   # Assume micromamba as Python package manager, and environment named env
@@ -31,7 +31,7 @@ The coordinate feature, identified by the suffix **_PDB.tar.gz**, is stored in H
 **Miniset** contains a tiny subset of the training data used in [FEater research](https://zenodo.org/records/10593541/files/FEater_paper.pdf), 
 
 ## Visual inspection of dataset
-The following console tools, including **viewcoord**, **viewsurf**, **viewvoxel** , are provided for visual inspection in to the dataset. [Open3D](https://www.open3d.org/) is required to render different molecular representations. 
+The following console tools, including **viewcoord**, **viewsurf**, **viewvoxel**, are provided for visual inspection in to the dataset. [Open3D](https://www.open3d.org/) is required to render different molecular representations. 
 
 Some example commands are as follow: 
 ```
@@ -40,7 +40,7 @@ viewsurf -f ValidationSet_Surface.h5 -i 15
 viewvoxel -f TestSet_Voxel.h5 -i 15 -r XXXX_Dataset.h5
 ```
 
-## Data loading, interation and spliting
+## Data loading, iteration and spliting
 
 
 

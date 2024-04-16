@@ -262,6 +262,20 @@ def main_render(inputfile:str, index:int, args):
   if args.save_fig:
     vis.capture_screen_image(f"{out_prefix}.png", True)
     # vis.capture_depth_image(f"{out_prefix}_depth.png", True)
+
+  final_obj = o3d.geometry.TriangleMesh()
+  for geom in geoms_coord:
+    if not args.topology: 
+      geom.paint_uniform_color([0.5, 0.5, 0.5])
+    final_obj += geom
+  for geo in geoms_box:
+    final_obj += geo
+  o3d.io.write_triangle_mesh("/home/yzhang/Desktop/final_obj.ply", final_obj,
+                               write_ascii=True,
+                               write_vertex_normals=True, 
+                               write_vertex_colors=True )
+  
+
   vis.destroy_window()
 
 def parse_args():

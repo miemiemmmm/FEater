@@ -62,10 +62,8 @@ def perform_training(training_settings: dict):
 
   st = time.perf_counter()
   trainingfiles = utils.checkfiles(training_settings["training_data"])
-  validfiles = utils.checkfiles(training_settings["validation_data"])
   testfiles = utils.checkfiles(training_settings["test_data"])
   training_data = dataloader.HilbertCurveDataset(trainingfiles)
-  valid_data = dataloader.HilbertCurveDataset(validfiles)
   test_data = dataloader.HilbertCurveDataset(testfiles)
 
   if training_settings["dataset"] == "single":
@@ -95,8 +93,6 @@ def perform_training(training_settings: dict):
     print(f"{message:#^80}")
     batch_nr = (len(training_data) + BATCH_SIZE - 1) // BATCH_SIZE
     for batch_idx, batch in enumerate(training_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR)):
-      # if (batch_idx+1) % 500 == 0:   # TODO: Remove this line when production
-      #   break
       train_data, train_label = batch
       
       if USECUDA:
@@ -110,43 +106,51 @@ def perform_training(training_settings: dict):
       loss.backward()
       optimizer.step()
 
-      if batch_idx % 50 == 0:
-        accuracy = utils.report_accuracy(pred, train_label, verbose=False)
-        print(f"Processing the block {batch_idx:>5d}/{batch_nr:<5d}; Loss: {loss.item():8.4f}; Accuracy: {accuracy:8.4f}")
+    _loss_test_cache = []
+    _loss_train_cache = []
+    _accuracy_test_cache = []
+    _accuracy_train_cache = []
+    with torch.no_grad(): 
+      # Use 8000 samples for the training and test data
+      for (trdata, trlabel) in training_data.mini_batches(batch_size=1000, process_nr=WORKER_NR):
+        if USECUDA:
+          trdata, trlabel = trdata.cuda(), trlabel.cuda()
+        pred = classifier(trdata)
+        pred_choice = pred.data.max(1)[1]
+        correct = pred_choice.eq(trlabel.data).cpu().sum()
+        tr_accuracy = correct.item() / float(trlabel.size()[0])
+        tr_loss = criterion(pred, trlabel)
+        _loss_train_cache.append(tr_loss.item())
+        _accuracy_train_cache.append(tr_accuracy)
+        if len(_loss_train_cache) == 8:
+          break
+        
+      for (tedata, telabel) in test_data.mini_batches(batch_size=1000, process_nr=WORKER_NR):
+        if USECUDA:
+          tedata, telabel = tedata.cuda(), telabel.cuda()
+        pred = classifier(tedata)
+        pred_choice = pred.data.max(1)[1]
+        correct = pred_choice.eq(telabel.data).cpu().sum()
+        te_accuracy = correct.item() / float(telabel.size()[0])
+        te_loss = criterion(pred, telabel)
+        _loss_test_cache.append(te_loss.item())
+        _accuracy_test_cache.append(te_accuracy)
+        if len(_loss_test_cache) == 8:
+          break
 
-      if (batch_idx + 1) % INTERVAL == 0:
-        if not os.path.exists(os.path.join(training_settings["output_folder"], "tmp_figs")):
-          subprocess.call(["mkdir", "-p", os.path.join(training_settings["output_folder"], "tmp_figs")])
-        vdata, vlabel = next(valid_data.mini_batches(batch_size=10000, process_nr=WORKER_NR))
-        preds, labels = utils.validation(classifier, vdata, vlabel, usecuda=USECUDA)
-        print(f"Estimated epoch time: {(time.perf_counter() - st) / (batch_idx + 1) * batch_nr:.2f} seconds")
-        if training_settings["dataset"] == "single":
-          print("#"*100)
-          print("Preds:")
-          utils.label_counts(preds)
-          print("Labels:")
-          utils.label_counts(labels)
-          print("#"*100)
-          utils.confusion_matrix(preds, labels, output_file=os.path.join(os.path.abspath(training_settings["output_folder"]), f"tmp_figs/idx_{epoch}_{batch_idx}.png"))
+    scheduler.step()
+
     # Save the model
     modelfile_output = os.path.join(os.path.abspath(training_settings["output_folder"]), f"resnet_{epoch}.pth")
-    conf_mtx_output  = os.path.join(os.path.abspath(training_settings["output_folder"]), f"resnet_confmatrix_{epoch}.png")
     print(f"Saving the model to {modelfile_output} ...")
     torch.save(classifier.state_dict(), modelfile_output)
-    print(f"Performing the prediction on the test set ...")
-    tdata, tlabel = next(test_data.mini_batches(batch_size=10000, process_nr=WORKER_NR))
-    pred, label = utils.validation(classifier, tdata, tlabel, usecuda=USECUDA)
-    with io.hdffile(os.path.join(training_settings["output_folder"], "performance.h5") , "a") as hdffile:
-      correct = np.count_nonzero(pred == label)
-      accuracy = correct / float(label.shape[0])
-      utils.update_hdf_by_slice(hdffile, "accuracy", np.array([accuracy], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
     
-    if training_settings["dataset"] == "single":
-      print(f"Saving the confusion matrix to {conf_mtx_output} ...")
-      utils.confusion_matrix(pred, label, output_file=conf_mtx_output)
-    else: 
-      pass
-    scheduler.step()
+    with io.hdffile(os.path.join(training_settings["output_folder"], "performance.h5") , "a") as hdffile:
+      utils.update_hdf_by_slice(hdffile, "loss_train", np.array([np.mean(_loss_train_cache)], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
+      utils.update_hdf_by_slice(hdffile, "loss_test", np.array([np.mean(_loss_test_cache)], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
+      utils.update_hdf_by_slice(hdffile, "accuracy_train", np.array([np.mean(_accuracy_train_cache)], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
+      utils.update_hdf_by_slice(hdffile, "accuracy_test", np.array([np.mean(_accuracy_test_cache)], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
+
 
 if __name__ == '__main__':
   args = parse_args()

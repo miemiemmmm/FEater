@@ -61,6 +61,30 @@ def main_render(inputfile:str, index:int, args):
     vis.run()
     vis.destroy_window()
 
+    # Save the object to a file
+    final_obj = o3d.geometry.TriangleMesh()
+    # Only add points 
+    from matplotlib import colormaps
+    cmap = colormaps.get_cmap("jet")
+    vertnr = np.array(surf.vertices).shape[0]
+    for idx, vert in enumerate(surf.vertices):
+      if np.linalg.norm(vert) == 0:
+        continue
+      box = o3d.geometry.TriangleMesh.create_box(width=0.075, height=0.075, depth=0.075)
+      box.translate(vert)
+      color = cmap(idx/vertnr)[:3]
+      box.paint_uniform_color(color)
+      final_obj += box
+
+    for ball in balls:
+      ball.compute_vertex_normals()
+      final_obj += ball
+    o3d.io.write_triangle_mesh("/home/yzhang/Desktop/final_obj.ply", final_obj,
+                               write_ascii=True,
+                               write_vertex_normals=True, 
+                               write_vertex_colors=True )
+
+
 
 def parse_args():
   parser = argparse.ArgumentParser()

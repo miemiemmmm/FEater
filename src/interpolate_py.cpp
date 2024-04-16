@@ -37,14 +37,12 @@ void translate_coord(float* coord, const int atom_nr, const int *dims, const dou
 	cog_coord[0] /= atom_nr;
 	cog_coord[1] /= atom_nr;
 	cog_coord[2] /= atom_nr;
-//	std::cout << "center of geom is: " << cog_coord[0] << " " << cog_coord[1] << " " << cog_coord[2] << "\n";
 
 	for (int i = 0; i < atom_nr; i++) {
 		coord[i*3]   = (coord[i*3] - cog_coord[0])/spacing + dims[0]/2;
 		coord[i*3+1] = (coord[i*3+1] - cog_coord[1])/spacing + dims[1]/2;
 		coord[i*3+2] = (coord[i*3+2] - cog_coord[2])/spacing + dims[2]/2;
 	}
-	// write_xyzr("test.xyzr", coord, atom_nr);
 }
 
 
