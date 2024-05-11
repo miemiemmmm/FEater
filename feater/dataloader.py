@@ -1,9 +1,7 @@
-import os, time
+import time
 import multiprocessing as mp
 
 import numpy as np
-import open3d as o3d
-import h5py as h5
 import torch
 import torch.utils.data as data
 
@@ -11,10 +9,11 @@ from . import io
 
 
 __all__ = [
-  "HDF5Dataset",
+  "BaseDataset",
   "CoordDataset",
   "VoxelDataset",
   "SurfDataset",
+  "HilbertCurveDataset", 
 ]
 
 
@@ -245,7 +244,7 @@ class CoordDataset(BaseDataset):
 class VoxelDataset(BaseDataset):
   def __init__(self, hdffiles:list):
     super().__init__(hdffiles)
-    # Generate the map for __getitem__ method to correctly locate the data from a set of HDF5 files
+    # Generate the map for __getitem__ method to correctly locate the data from a set of HDF5 files 
     global_ind = 0
     for fidx, file in enumerate(self.hdffiles):
       with io.hdffile(file, "r") as h5file:
@@ -253,6 +252,8 @@ class VoxelDataset(BaseDataset):
         entry_nr_i = h5file["label"].shape[0]
       self.position_map[global_ind:global_ind+entry_nr_i] = np.arange(entry_nr_i)
       self.file_map[global_ind: global_ind + entry_nr_i] = fidx
+      self.start_map[global_ind:global_ind + entry_nr_i] = np.arange(entry_nr_i) 
+      self.end_map[global_ind:global_ind + entry_nr_i] = np.arange(entry_nr_i) + 1
       global_ind += entry_nr_i
 
   def __getitem__(self, index):
@@ -269,14 +270,15 @@ class VoxelDataset(BaseDataset):
     return data, label
   
   def mini_batch_task(self, index):
-    return (self.get_file(index), "voxel", np.s_[index])
+    return (self.get_file(index), "voxel", np.s_[self.get_start(index):self.get_end(index)])
+    # return (self.get_file(index), "voxel", np.s_[index])
 
   def __len__(self):
     return self.total_entries
 
   def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, **kwargs):
     for data, label in super().mini_batches(batch_size=batch_size, shuffle=shuffle, process_nr=process_nr, **kwargs): 
-      data = data[:, np.newaxis, ...]
+      data = data[:, ...]
       yield data, label
 
 
@@ -298,15 +300,17 @@ class SurfDataset(BaseDataset):
     print(f"SurfDataset: Average vertices per entry: {np.mean(self.end_map - self.start_map):8.2f}")
 
   def __getitem__(self, index):
-    # Get the file
+    # Check the index validity
     if index >= self.total_entries:
       raise IndexError(f"Index {index} is out of range. The dataset has {self.total_entries} entries.")
+    # Prepare the task and read the data
     task = self.mini_batch_task(index)
     data = readdata(*task)
     label = readlabel(self.get_file(index), self.get_position(index))
+    # Perform padding if necessary
     if self.do_padding:
       data = self.padding(data)
-
+    # Convert the data to torch.Tensor
     data = np.array(data, dtype=np.float32)
     label = np.array(label, dtype=np.int64)
     data = torch.from_numpy(data)
@@ -322,10 +326,12 @@ class SurfDataset(BaseDataset):
       yield data, label
 
   def mini_batch_task(self, index):
+    """
+    Prepare arguments for the mini-batch task
+    """
     start_idx = self.get_start(index)
     end_idx = self.get_end(index)
     if (end_idx - start_idx > self.target_np) and self.do_padding:
-      # print("doing batch padding", self.do_padding)
       # Randomly select target_np points
       _rand = np.arange(start_idx, end_idx, dtype=np.uint64)
       np.random.shuffle(_rand)
@@ -339,6 +345,15 @@ class SurfDataset(BaseDataset):
     return (self.get_file(index), "vertices", theslice)
 
   def padding_batch(self, batch):
+    """
+    Perform point padding for a batch of surface vertices
+
+    Parameters
+    ----------
+    batch : torch.Tensor
+      The input batch of surface vertices
+      
+    """
     ret_points = np.zeros((batch.shape[0], self.target_np, batch.shape[2]), dtype=np.float32)
     batch = batch.numpy()
     ret_point_rand = np.arange(self.target_np)
@@ -356,7 +371,25 @@ class SurfDataset(BaseDataset):
     return ret_points
 
   def padding(self, points):
-    # Mask point at 0,0,0
+    """
+    Padding the points to the target number of points
+
+    Parameters
+    ----------
+    points : np.ndarray
+      The input points
+
+    Returns
+    -------
+    np.ndarray
+      The padded points
+
+    Notes
+    -----
+    The padding is done by randomly selecting the points to fill the target number of points
+
+    """
+    # Placeholder coordinate is (0,0,0)
     mask = np.all(points == 0, axis=1)
     points = points[~mask]
     if points.shape[0] < self.target_np:
@@ -372,29 +405,32 @@ class SurfDataset(BaseDataset):
     return points
 
   ################### ?????????? ###################
-  def view_verts(self, index):
-    import open3d as o3d
-    points, _ = self.__getitem__(index)
-    points = points.numpy()
-    # Count number of points at 0,0,0
-    zero_nr = np.count_nonzero(points, axis=1)
-    print(points.shape)
-    zero_point_nr = np.count_nonzero(~np.count_nonzero(points, axis=1).astype(bool))
-    print(f"Number of points at 0,0,0: {zero_point_nr}")
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points)
-    o3d.visualization.draw_geometries([pcd])
+  # def view_verts(self, index):
+  #   import open3d as o3d
+  #   points, _ = self.__getitem__(index)
+  #   points = points.numpy()
+  #   # Count number of points at 0,0,0
+  #   zero_nr = np.count_nonzero(points, axis=1)
+  #   print(points.shape)
+  #   zero_point_nr = np.count_nonzero(~np.count_nonzero(points, axis=1).astype(bool))
+  #   print(f"Number of points at 0,0,0: {zero_point_nr}")
+  #   pcd = o3d.geometry.PointCloud()
+  #   pcd.points = o3d.utility.Vector3dVector(points)
+  #   o3d.visualization.draw_geometries([pcd])
 
-  def view_verts2(self, index):
-    import open3d as o3d
-    points, _ = next(self.mini_batches(batch_size=1, shuffle=True, process_nr=1))
-    points = points.numpy()[0]
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points)
-    o3d.visualization.draw_geometries([pcd])
+  # def view_verts2(self, index):
+  #   import open3d as o3d
+  #   points, _ = next(self.mini_batches(batch_size=1, shuffle=True, process_nr=1))
+  #   points = points.numpy()[0]
+  #   pcd = o3d.geometry.PointCloud()
+  #   pcd.points = o3d.utility.Vector3dVector(points)
+  #   o3d.visualization.draw_geometries([pcd])
 
   def get_surf(self, index): 
-    # make map for the faces
+    """
+    Get an Open3D surface object of the surface via its index within the dataset 
+    """
+    import open3d as o3d
     st = time.perf_counter()
     filename = self.get_file(index)
     position = self.get_position(index)

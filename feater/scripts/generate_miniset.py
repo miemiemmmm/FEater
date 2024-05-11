@@ -62,7 +62,6 @@ def generate_coord_miniset(sourcefile, minisetoutput, indicefile, label_nr, forc
         for key in feater.constants.RES2LAB_DUAL.keys():
           topi = hdf.get_top(key)
           new_hdf.dump_top(topi, key)
-          print(key, topi)
       elif label_nr == 20:
         for key in feater.constants.RES2LAB.keys():
           topi = hdf.get_top(key)
@@ -111,7 +110,7 @@ def generate_coord_miniset(sourcefile, minisetoutput, indicefile, label_nr, forc
           hdf["entry_number"][0] += len(label_buffer)
   print(f"Finished processing the dataset; Time elapsed: {time.perf_counter()-st:.2f} seconds")
 
-def process_surf(sourcefile, outputfile, indicefile, label_nr, force=False, compression_level=4): 
+def generate_surf_miniset(sourcefile, outputfile, indicefile, label_nr, force=False, compression_level=4): 
   """
   """
   if os.path.exists(outputfile) and not force:
@@ -178,7 +177,7 @@ def process_surf(sourcefile, outputfile, indicefile, label_nr, force=False, comp
         utils.add_data_to_hdf(f, "face_ends", face_ed_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=compression_level)
   print(f"Finished processing the dataset; Time elapsed: {time.perf_counter()-st:.2f} seconds")
 
-def process_vox(sourcefile, outputfile, indicefile, label_nr, force=False, compression_level=4): 
+def generate_vox_miniset(sourcefile, outputfile, indicefile, label_nr, force=False, compression_level=4): 
   """
   """
   if os.path.exists(outputfile) and not force:
@@ -211,7 +210,8 @@ def process_vox(sourcefile, outputfile, indicefile, label_nr, force=False, compr
       tasks = [dset.mini_batch_task(i) for i in batch]
       results = pool.starmap(dataloader.readdata, tasks)
       
-      voxel_buffer = np.asarray([r for r in results], dtype=np.float32)
+      # concatenate along the first axis
+      voxel_buffer = np.concatenate(results, axis=0)
       with feater.io.hdffile(sourcefile, "r") as hdf:
         label_buffer = hdf["label"][slice_batch]
 
@@ -220,7 +220,7 @@ def process_vox(sourcefile, outputfile, indicefile, label_nr, force=False, compr
         utils.add_data_to_hdf(hdf, "label", label_buffer, dtype=np.int32, chunks=True, maxshape=[None], compression="gzip", compression_opts=compression_level)
   print(f"Finished processing the dataset; Time elapsed: {time.perf_counter()-st:.2f} seconds")
 
-def process_hilbert(sourcefile, outputfile, indicefile, label_nr, force=False, compression_level=4): 
+def generate_hilbert_miniset(sourcefile, outputfile, indicefile, label_nr, force=False, compression_level=4): 
   """
   """
   if os.path.exists(outputfile) and not force:
@@ -258,101 +258,142 @@ def process_hilbert(sourcefile, outputfile, indicefile, label_nr, force=False, c
         utils.add_data_to_hdf(hdf, "label", label_buffer, dtype=np.int32, chunks=True, maxshape=[None], compression="gzip", compression_opts=compression_level)
   print(f"Finished processing the dataset; Time elapsed: {time.perf_counter()-st:.2f} seconds")
 
+if "__main__" == __name__:
+  label_nr = 20
+  target_nr = 800
+  outputdir = f"/diskssd/yzhang/FEater_Minisets/miniset_{target_nr}_single"
+
+  #############################################################################
+  #############################################################################
+  #############################################################################
+  if not os.path.exists(outputdir):
+    os.makedirs(outputdir)
+  
+  # Check if it contains any h5 files
+  for f in os.listdir(outputdir):
+    if f.endswith(".h5"):
+      raise ValueError(f"Directory {outputdir} already contains h5 files")
+
+  if label_nr == 400:
+    mark = "dual"
+  elif label_nr == 20:
+    mark = "single"
+
+  indicefile = os.path.join(outputdir, f"Miniset_Indices_{target_nr}_{mark}.json")
+  OutputFiles = [
+    os.path.join(outputdir, f"Miniset_Coord_{target_nr}_{mark}.h5"),
+    os.path.join(outputdir, f"Miniset_Surf_{target_nr}_{mark}.h5"),
+    os.path.join(outputdir, f"Miniset_Vox_{target_nr}_{mark}.h5"),
+    os.path.join(outputdir, f"Miniset_Hilbert_{target_nr}_{mark}.h5")
+  ]
+
+  # According to the indices, make the new mini dataset
+  DualSourceFiles = [
+    "/Weiss/FEater_Dual_PDBHDF/TrainingSet_Dataset.h5", 
+    "/Weiss/FEater_Dual_SURF/TrainingSet_Surface.h5",
+    "/Weiss/FEater_Dual_VOX/TrainingSet_Voxel.h5",
+    "/Weiss/FEater_Dual_HILB/TrainingSet_Hilbert.h5"
+  ]
+  SingleSourceFiles = [
+    "/Weiss/FEater_Single_PDBHDF/TrainingSet_Dataset.h5",
+    "/Weiss/FEater_Single_SURF/TrainingSet_Surface.h5",
+    "/Weiss/FEater_Single_VOX/TrainingSet_Voxel.h5",
+    "/Weiss/FEater_Single_HILB/TrainingSet_Hilbert.h5",
+  ]
+  if label_nr == 400:
+    SourceFiles = DualSourceFiles
+  elif label_nr == 20:
+    SourceFiles = SingleSourceFiles
+
+  # Firstly make the indices
+  seed = label_nr
+  np.random.seed(seed)
+  make_indices(SourceFiles[0], indicefile, label_nr, target_nr)
+
+  # exit(0)
+
+  generate_coord_miniset(SourceFiles[0], OutputFiles[0], indicefile, label_nr, force=True, compression_level=0)
+  generate_surf_miniset(SourceFiles[1], OutputFiles[1], indicefile, label_nr, force=True, compression_level=0)
+  generate_vox_miniset(SourceFiles[2], OutputFiles[2], indicefile, label_nr, force=True, compression_level=0)
+  generate_hilbert_miniset(SourceFiles[3], OutputFiles[3], indicefile, label_nr, force=True, compression_level=0)
+
+  time1 = time.perf_counter()
+  dset = dataloader.CoordDataset([OutputFiles[0]])
+  for data, label in dset.mini_batches(128, 1, 4):
+    pass
+  print(f"Iteration of CoordDataset data: {time.perf_counter()-time1:.2f} seconds")
+
+  time1 = time.perf_counter()
+  dset = dataloader.SurfDataset([OutputFiles[1]])
+  for data, label in dset.mini_batches(128, 1, 4):
+    pass
+  print(f"Iteration of SurfDataset data: {time.perf_counter()-time1:.2f} seconds")
 
 
-label_nr = 400
-target_nr = 50
-seed = 400
-sourcefile = "/Weiss/FEater_Dual_PDBHDF/TrainingSet_Dataset.h5"
-indicefile = f"/diskssd/yzhang/FEater_Minisets/indices_{seed}.json"
-np.random.seed(seed)
+  time1 = time.perf_counter()
+  dset = dataloader.VoxelDataset([OutputFiles[2]])
+  for data, label in dset.mini_batches(128, 1, 4):
+    pass
+  print(f"Iteration of VoxelDataset data: {time.perf_counter()-time1:.2f} seconds")
 
-# Firstly make the indices
-make_indices(sourcefile, indicefile, label_nr, target_nr)
 
-# According to the indices, make the new mini dataset
-pdb_source = "/Weiss/FEater_Dual_PDBHDF/TrainingSet_Dataset.h5"
-pdb_minisetfile = "/diskssd/yzhang/FEater_Minisets/testpdb.h5"
-generate_coord_miniset(pdb_source, pdb_minisetfile, indicefile, label_nr, force=True, compression_level=0)
-
-surface_source = "/Weiss/FEater_Dual_SURF/TrainingSet_Surface.h5"
-surface_minisetfile = "/diskssd/yzhang/FEater_Minisets/testsurf.h5"
-process_surf(surface_source, surface_minisetfile, indicefile, label_nr, force=True, compression_level=0)
-
-voxel_source = "/Weiss/FEater_Dual_VOX/TrainingSet_Voxel.h5"
-voxel_minisetfile = "/diskssd/yzhang/FEater_Minisets/testvox.h5"
-process_vox(voxel_source, voxel_minisetfile, indicefile, label_nr, force=True, compression_level=0)
-
-hilbert_source = "/Weiss/FEater_Dual_HILB/TrainingSet_Hilbert.h5"
-hilbert_minisetfile = "/diskssd/yzhang/FEater_Minisets/testhilbert.h5"
-process_hilbert(hilbert_source, hilbert_minisetfile, indicefile, label_nr, force=True, compression_level=0)
+  time1 = time.perf_counter()
+  dset = dataloader.HilbertCurveDataset([OutputFiles[3]])
+  for data, label in dset.mini_batches(128, 1, 4):
+    pass
+  print(f"Iteration of HilbertCurveDataset data: {time.perf_counter()-time1:.2f} seconds")
 
 
 
-
-
-
-time1 = time.perf_counter()
-dset = dataloader.CoordDataset([pdb_minisetfile])
-for data, label in dset.mini_batches(128, 1, 4):
-  pass
-print(f"Iteration of CoordDataset data: {time.perf_counter()-time1:.2f} seconds")
-
-time1 = time.perf_counter()
-dset = dataloader.SurfDataset([surface_minisetfile])
-for data, label in dset.mini_batches(128, 1, 4):
-  pass
-print(f"Iteration of SurfDataset data: {time.perf_counter()-time1:.2f} seconds")
-
-
-time1 = time.perf_counter()
-dset = dataloader.VoxelDataset([voxel_minisetfile])
-for data, label in dset.mini_batches(128, 1, 4):
-  pass
-print(f"Iteration of VoxelDataset data: {time.perf_counter()-time1:.2f} seconds")
-
-
-time1 = time.perf_counter()
-dset = dataloader.HilbertCurveDataset([hilbert_minisetfile])
-for data, label in dset.mini_batches(128, 1, 4):
-  pass
-print(f"Iteration of HilbertCurveDataset data: {time.perf_counter()-time1:.2f} seconds")
-
-
-
-# No compression test2
-# Iteration of CoordDataset data: 1.76 seconds
-# SurfDataset: Average vertices per entry:  3098.46
-# Iteration of SurfDataset data: 59.16 seconds
-# Iteration of VoxelDataset data: 6.85 seconds
-# Iteration of HilbertCurveDataset data: 3.29 seconds
-
-# Significant increase in loading time for compressed data
-
-# compression level 4
-# Iteration of CoordDataset data: 1.89 seconds
-# Iteration of SurfDataset data: 59.89 seconds
-# Iteration of VoxelDataset data: 32.99 seconds
-# Iteration of HilbertCurveDataset data: 10.42 seconds
-
-
-# 50 samples per class with compression
-# total 4.7G
-# -rw-r--r-- 1 yzhang users 254K Apr 16 14:20 indices_400.json
-# -rw-r--r-- 1 yzhang users  14M Apr 16 14:20 testpdb.h5
-# -rw-r--r-- 1 yzhang users 1.2G Apr 16 14:21 testsurf.h5
-# -rw-r--r-- 1 yzhang users 2.4G Apr 16 14:22 testvox.h5
-# -rw-r--r-- 1 yzhang users 1.2G Apr 16 14:22 testhilbert.h5
-
-# 50 samples per class without compression
-# total 5.9G
-# -rw-r--r-- 1 yzhang users 254K Apr 16 14:46 indices_400.json
-# -rw-r--r-- 1 yzhang users  18M Apr 16 14:46 testpdb.h5
-# -rw-r--r-- 1 yzhang users 2.2G Apr 16 14:46 testsurf.h5
-# -rw-r--r-- 1 yzhang users 2.5G Apr 16 14:46 testvox.h5
-# -rw-r--r-- 1 yzhang users 1.3G Apr 16 14:47 testhilbert.h5
-
-# Save 20% space but cause x4.7 increase in loading time for voxel representation
-# x3.2 increase in loading time for hilbert curve representation 
-
-
+  #############################################################################
+  # Conclusion: 
+  # Save 20% space but cause x4.7 increase in loading time for voxel representation
+  # x3.2 increase in loading time for hilbert curve representation 
+  #############################################################################
+  # 50 samples per class with compression level 4
+  # total 4.7G
+  # -rw-r--r-- 1 yzhang users 254K Apr 16 14:20 indices_400.json
+  # -rw-r--r-- 1 yzhang users  14M Apr 16 14:20 testpdb.h5
+  # -rw-r--r-- 1 yzhang users 1.2G Apr 16 14:21 testsurf.h5
+  # -rw-r--r-- 1 yzhang users 2.4G Apr 16 14:22 testvox.h5
+  # -rw-r--r-- 1 yzhang users 1.2G Apr 16 14:22 testhilbert.h5
+  #############################################################################
+  # 50 samples per class without compression
+  # total 5.9G
+  # -rw-r--r-- 1 yzhang users 254K Apr 16 14:46 indices_400.json
+  # -rw-r--r-- 1 yzhang users  18M Apr 16 14:46 testpdb.h5
+  # -rw-r--r-- 1 yzhang users 2.2G Apr 16 14:46 testsurf.h5
+  # -rw-r--r-- 1 yzhang users 2.5G Apr 16 14:46 testvox.h5
+  # -rw-r--r-- 1 yzhang users 1.3G Apr 16 14:47 testhilbert.h5
+  #############################################################################
+  # No compression / 50 samples per class
+  # Iteration of CoordDataset data: 1.76 seconds
+  # SurfDataset: Average vertices per entry:  3098.46
+  # Iteration of SurfDataset data: 59.16 seconds
+  # Iteration of VoxelDataset data: 6.85 seconds
+  # Iteration of HilbertCurveDataset data: 3.29 seconds
+  #############################################################################
+  # compression level 4 / 50 samples per class
+  # Iteration of CoordDataset data: 1.89 seconds
+  # Iteration of SurfDataset data: 59.89 seconds
+  # Iteration of VoxelDataset data: 32.99 seconds
+  # Iteration of HilbertCurveDataset data: 10.42 seconds
+  #############################################################################
+  # No compression / 200 samples per class 
+  # Iteration of CoordDataset data: 7.07 seconds
+  # Iteration of SurfDataset data: 234.27 seconds
+  # Iteration of VoxelDataset data: 38.01 seconds
+  # Iteration of HilbertCurveDataset data: 21.70 seconds
+  #############################################################################
+  # Iteration of CoordDataset data: 14.23 seconds
+  # SurfDataset: Average vertices per entry:  3098.90
+  # Iteration of SurfDataset data: 469.12 seconds
+  # Iteration of VoxelDataset data: 123.14 seconds
+  # Iteration of HilbertCurveDataset data: 67.88 seconds
+  #############################################################################
+  # No compression / 800 samples per class 
+  # Iteration of CoordDataset data: 28.61 seconds
+  # Iteration of SurfDataset data: 934.48 seconds
+  # Iteration of VoxelDataset data: 439.55 seconds
+  # Iteration of HilbertCurveDataset data: 137.56 seconds
+  #############################################################################

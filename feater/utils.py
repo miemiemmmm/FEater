@@ -127,28 +127,29 @@ def confusion_matrix(predictions, labels, output_file="confusion_matrix.png"):
   plt.savefig(output_file, dpi=300, bbox_inches="tight")
   plt.close()
 
-def plot_matrix(conf_mat, output_file="confusion_matrix.png"):
-  # Plot the confusion matrix
-  fig, ax  = plt.subplots(figsize=(16, 16))
-  im = ax.imshow(conf_mat, cmap="inferno", vmin=0, vmax=100)
-  ax.set_title(f"Confusion Matrix of the PointNet Classifier\nOvervall Accuracy: {percent_acc:.3f}, Mean Accuracy: {mean_acc:.3f}", fontsize=20)
-  ax.set_xlabel("Ground Truth", fontsize=20)
-  ax.set_ylabel("Prediction", fontsize=20)
-  tick_labels = [f"{constants.LAB2RES[i]} ({i})" for i in range(nr_classes)]
-  ax.set_xticks(np.arange(nr_classes))
-  ax.set_yticks(np.arange(nr_classes))
-  ax.set_xticklabels(tick_labels, rotation=-45, fontsize=20)
-  ax.set_yticklabels(tick_labels, fontsize=20)
 
-  # Mark text on the confusion matrix
-  for i in range(nr_classes):
-    for j in range(nr_classes):
-      if conf_mat[i, j] > 10:
-        ax.text(j,i, f"{int(conf_mat[i, j])}", ha="center", va="center", color="white" if conf_mat[i, j] < 50 else "black", fontsize=15, fontweight="bold")
-  cbar = fig.colorbar(im, ax=ax, shrink=0.8, aspect=30)
-  cbar.ax.tick_params(labelsize=20)
-  plt.savefig(output_file, dpi=300, bbox_inches="tight")
-  plt.close()
+# def plot_matrix(conf_mat, output_file="confusion_matrix.png"):
+#   # Plot the confusion matrix
+#   fig, ax  = plt.subplots(figsize=(16, 16))
+#   im = ax.imshow(conf_mat, cmap="inferno", vmin=0, vmax=100)
+#   ax.set_title(f"Confusion Matrix of the PointNet Classifier\nOvervall Accuracy: {percent_acc:.3f}, Mean Accuracy: {mean_acc:.3f}", fontsize=20)
+#   ax.set_xlabel("Ground Truth", fontsize=20)
+#   ax.set_ylabel("Prediction", fontsize=20)
+#   tick_labels = [f"{constants.LAB2RES[i]} ({i})" for i in range(nr_classes)]
+#   ax.set_xticks(np.arange(nr_classes))
+#   ax.set_yticks(np.arange(nr_classes))
+#   ax.set_xticklabels(tick_labels, rotation=-45, fontsize=20)
+#   ax.set_yticklabels(tick_labels, fontsize=20)
+
+#   # Mark text on the confusion matrix
+#   for i in range(nr_classes):
+#     for j in range(nr_classes):
+#       if conf_mat[i, j] > 10:
+#         ax.text(j,i, f"{int(conf_mat[i, j])}", ha="center", va="center", color="white" if conf_mat[i, j] < 50 else "black", fontsize=15, fontweight="bold")
+#   cbar = fig.colorbar(im, ax=ax, shrink=0.8, aspect=30)
+#   cbar.ax.tick_params(labelsize=20)
+#   plt.savefig(output_file, dpi=300, bbox_inches="tight")
+#   plt.close()
 
 
 def label_counts(train_label):
