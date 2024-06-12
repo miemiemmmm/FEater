@@ -4,12 +4,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from collections import OrderedDict
 
+"""
+Original PyTorch implementation of DeepRank network: 
+https://joss.theoj.org/papers/10.21105/joss.05983
+
+Code adopted from: 
+DeepRank2: https://github.com/DeepRank/deeprank2/blob/main/deeprank2/neuralnets/cnn/model3d.py 
+"""
+
 class DeepRankNetwork(torch.nn.Module): 
-  """
-  Code adopted from: 
-  DeepRank2: https://github.com/DeepRank/deeprank2/blob/main/deeprank2/neuralnets/cnn/model3d.py
-  
-  """
   def __init__(self, input_channel_number: int, output_dimension: int,
                box_shape:int, conv=[4, 5], fc = [84]):
     super(DeepRankNetwork, self).__init__()

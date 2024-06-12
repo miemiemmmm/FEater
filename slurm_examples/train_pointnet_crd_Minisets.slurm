@@ -58,7 +58,7 @@ target_point_nr=$(python -c "import sys; filestr = sys.argv[1]; files=[i for i i
 pretrained_model=""
 start_epoch=0
 
-total_epoch=1
+total_epoch=120
 batch_size=256
 
 

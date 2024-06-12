@@ -11,12 +11,9 @@
 source /home/yzhang/mamba/bin/loadmamba
 micromamba activate pointnet_torch
 export PYTHONUNBUFFERED=1
-export CUDA_LAUNCH_BLOCKING=1
 
 train_files_single="/diskssd/yzhang/FEater_Minisets/miniset_2000_single/te_hilb.txt%/diskssd/yzhang/FEater_Minisets/miniset_200_single/te_hilb.txt%/diskssd/yzhang/FEater_Minisets/miniset_400_single/te_hilb.txt%/diskssd/yzhang/FEater_Minisets/miniset_800_single/te_hilb.txt%"
-
 test_files_single="/Weiss/FEater_Single_HILB/te.txt%/Weiss/FEater_Single_HILB/te.txt%/Weiss/FEater_Single_HILB/te.txt%/Weiss/FEater_Single_HILB/te.txt%"
-
 data_types_single="single%single%single%single%"
 output_paths_single="/Weiss/training_results_HILB/miniset_2000_single_result%/Weiss/training_results_HILB/miniset_200_single_result%/Weiss/training_results_HILB/miniset_400_single_result%/Weiss/training_results_HILB/miniset_800_single_result%"
 
@@ -50,11 +47,12 @@ test_file=$(python -c "import sys; filestr = sys.argv[1]; files=[i for i in file
 pretrained_model=""
 start_epoch=0
 
-total_epoch=1
+total_epoch=120
 batch_size=256
 
-lr_init=0.001
-lr_decay_steps=30
+# Improve the initial learning rate and accelerate the learning rate decay
+lr_init=0.002
+lr_decay_steps=5
 lr_decay_rate=0.5
 
 

@@ -2,7 +2,7 @@
 #SBATCH --job-name=deeprank_training_results             									  # NOTE: Job name and output/error files
 #SBATCH --output=/Weiss/training_results_DeepRank/deeprank_training_results_%a.out
 #SBATCH --error=/Weiss/training_results_DeepRank/deeprank_training_results_%a.err
-#SBATCH --array=0-6%2
+#SBATCH --array=6
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
@@ -47,7 +47,7 @@ test_file=$(python -c "import sys; filestr = sys.argv[1]; files=[i for i in file
 pretrained_model=""
 start_epoch=0
 
-total_epoch=1
+total_epoch=120
 batch_size=256
 
 lr_init=0.001

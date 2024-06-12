@@ -32,7 +32,12 @@ def make_indices(sourcefile, indicefile, label_nr, target_nr):
     for i in range(label_nr): 
       indices = np.where(labels == i)[0]
       # print(indices.shape, indices[:5])
-      selected = np.random.choice(indices, target_nr, replace=False)
+      # in case the number of samples is less than target_nr
+      if indices.shape[0] < target_nr:
+        print(f"Warning: label {i} has less than {target_nr} samples")
+        selected = np.array([i for i in indices], dtype=np.int32)
+      else:
+        selected = np.random.choice(indices, target_nr, replace=False)
       selected.sort()
       print(selected.shape, selected[:5])
       result_dict[i] = selected.tolist()
@@ -205,15 +210,15 @@ def generate_vox_miniset(sourcefile, outputfile, indicefile, label_nr, force=Fal
   with mp.Pool(32) as pool:
     dset = dataloader.VoxelDataset([sourcefile])
     for idx, batch in enumerate(batches):
+      
       print(f"Processing batch {idx}/{len(batches)} having {len(batch)} entries; Time remaining {(time.perf_counter()-st)/(idx+1)*(len(batches)-idx):.2f}")
-      slice_batch = np.s_[batch]
       tasks = [dset.mini_batch_task(i) for i in batch]
       results = pool.starmap(dataloader.readdata, tasks)
       
       # concatenate along the first axis
       voxel_buffer = np.concatenate(results, axis=0)
       with feater.io.hdffile(sourcefile, "r") as hdf:
-        label_buffer = hdf["label"][slice_batch]
+        label_buffer = np.array([hdf["label"][i] for i in batch], dtype=np.int32)
 
       with feater.io.hdffile(outputfile, "a") as hdf:
         utils.add_data_to_hdf(hdf, "voxel", voxel_buffer, dtype=np.float32, chunks=True, maxshape=(None, 32, 32, 32), compression="gzip", compression_opts=compression_level)
@@ -245,13 +250,12 @@ def generate_hilbert_miniset(sourcefile, outputfile, indicefile, label_nr, force
     dset = dataloader.HilbertCurveDataset([sourcefile])
     for idx, batch in enumerate(batches):
       print(f"Processing batch {idx}/{len(batches)} having {len(batch)} entries; Time remaining {(time.perf_counter()-st)/(idx+1)*(len(batches)-idx):.2f}")
-      slice_batch = np.s_[batch]
       tasks = [dset.mini_batch_task(i) for i in batch]
       results = pool.starmap(dataloader.readdata, tasks)
       
       voxel_buffer = np.asarray([r[0] for r in results], dtype=np.float32)
       with feater.io.hdffile(sourcefile, "r") as hdf:
-        label_buffer = hdf["label"][slice_batch]
+        label_buffer = np.array([hdf["label"][i] for i in batch], dtype=np.int32)
 
       with feater.io.hdffile(outputfile, "a") as hdf:
         utils.add_data_to_hdf(hdf, "voxel", voxel_buffer, dtype=np.float32, chunks=True, maxshape=(None, 128, 128), compression="gzip", compression_opts=compression_level)
@@ -260,24 +264,21 @@ def generate_hilbert_miniset(sourcefile, outputfile, indicefile, label_nr, force
 
 if "__main__" == __name__:
   label_nr = 20
-  target_nr = 800
-  outputdir = f"/diskssd/yzhang/FEater_Minisets/miniset_{target_nr}_single"
+  target_nr = 1000
+  outputdir = f"/Matter/feater_train_1000/"
 
   #############################################################################
   #############################################################################
   #############################################################################
   if not os.path.exists(outputdir):
     os.makedirs(outputdir)
-  
-  # Check if it contains any h5 files
-  for f in os.listdir(outputdir):
-    if f.endswith(".h5"):
-      raise ValueError(f"Directory {outputdir} already contains h5 files")
 
   if label_nr == 400:
     mark = "dual"
   elif label_nr == 20:
     mark = "single"
+  else: 
+    raise ValueError("label_nr must be either 400 or 20")
 
   indicefile = os.path.join(outputdir, f"Miniset_Indices_{target_nr}_{mark}.json")
   OutputFiles = [
@@ -313,35 +314,46 @@ if "__main__" == __name__:
   # exit(0)
 
   generate_coord_miniset(SourceFiles[0], OutputFiles[0], indicefile, label_nr, force=True, compression_level=0)
+  with open(os.path.join(outputdir, f"{mark}_coord.txt"), "w") as f:
+    f.write(os.path.abspath(OutputFiles[0]) + "\n")
+  
   generate_surf_miniset(SourceFiles[1], OutputFiles[1], indicefile, label_nr, force=True, compression_level=0)
+  with open(os.path.join(outputdir, f"{mark}_surf.txt"), "w") as f:
+    f.write(os.path.abspath(OutputFiles[1]) + "\n")
+
   generate_vox_miniset(SourceFiles[2], OutputFiles[2], indicefile, label_nr, force=True, compression_level=0)
+  with open(os.path.join(outputdir, f"{mark}_vox.txt"), "w") as f:
+    f.write(os.path.abspath(OutputFiles[2]) + "\n")
+
   generate_hilbert_miniset(SourceFiles[3], OutputFiles[3], indicefile, label_nr, force=True, compression_level=0)
+  with open(os.path.join(outputdir, f"{mark}_hilbert.txt"), "w") as f:
+    f.write(os.path.abspath(OutputFiles[3]) + "\n")
 
-  time1 = time.perf_counter()
-  dset = dataloader.CoordDataset([OutputFiles[0]])
-  for data, label in dset.mini_batches(128, 1, 4):
-    pass
-  print(f"Iteration of CoordDataset data: {time.perf_counter()-time1:.2f} seconds")
+  # time1 = time.perf_counter()
+  # dset = dataloader.CoordDataset([OutputFiles[0]])
+  # for data, label in dset.mini_batches(128, 1, 4):
+  #   pass
+  # print(f"Iteration of CoordDataset data: {time.perf_counter()-time1:.2f} seconds")
 
-  time1 = time.perf_counter()
-  dset = dataloader.SurfDataset([OutputFiles[1]])
-  for data, label in dset.mini_batches(128, 1, 4):
-    pass
-  print(f"Iteration of SurfDataset data: {time.perf_counter()-time1:.2f} seconds")
-
-
-  time1 = time.perf_counter()
-  dset = dataloader.VoxelDataset([OutputFiles[2]])
-  for data, label in dset.mini_batches(128, 1, 4):
-    pass
-  print(f"Iteration of VoxelDataset data: {time.perf_counter()-time1:.2f} seconds")
+  # time1 = time.perf_counter()
+  # dset = dataloader.SurfDataset([OutputFiles[1]])
+  # for data, label in dset.mini_batches(128, 1, 4):
+  #   pass
+  # print(f"Iteration of SurfDataset data: {time.perf_counter()-time1:.2f} seconds")
 
 
-  time1 = time.perf_counter()
-  dset = dataloader.HilbertCurveDataset([OutputFiles[3]])
-  for data, label in dset.mini_batches(128, 1, 4):
-    pass
-  print(f"Iteration of HilbertCurveDataset data: {time.perf_counter()-time1:.2f} seconds")
+  # time1 = time.perf_counter()
+  # dset = dataloader.VoxelDataset([OutputFiles[2]])
+  # for data, label in dset.mini_batches(128, 1, 4):
+  #   pass
+  # print(f"Iteration of VoxelDataset data: {time.perf_counter()-time1:.2f} seconds")
+
+
+  # time1 = time.perf_counter()
+  # dset = dataloader.HilbertCurveDataset([OutputFiles[3]])
+  # for data, label in dset.mini_batches(128, 1, 4):
+  #   pass
+  # print(f"Iteration of HilbertCurveDataset data: {time.perf_counter()-time1:.2f} seconds")
 
 
 

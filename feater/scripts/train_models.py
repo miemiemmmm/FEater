@@ -11,20 +11,22 @@ import torch.optim as optim
 import torch.utils.data as data
 import torch.nn.functional as F
 import torchvision
+import transformers
 
 from torch.utils.tensorboard import SummaryWriter
 
 # Import models 
 from feater.models.pointnet import PointNetCls      
-from feater.models.voxnet import VoxNet
-from feater.models.resnet import ResNet
-from feater.models.deeprank import DeepRankNetwork
-
 from feater import dataloader, utils
 import feater
 
 tensorboard_writer = SummaryWriter("/diskssd/yzhang/FEater_Minisets/tensorboard")
 
+# For point cloud type of data, the input is in the shape of (B, 3, N)
+INPUT_POINTS = 27
+def update_pointnr(pointnr):
+  global INPUT_POINTS
+  INPUT_POINTS = pointnr
 
 OPTIMIZERS = {
   "adam": optim.Adam, 
@@ -36,12 +38,106 @@ LOSS_FUNCTIONS = {
 }
 
 DATALOADER_TYPES = {
-  "resnet": dataloader.HilbertCurveDataset,
+  "pointnet": dataloader.CoordDataset,
+  "pointnet2": dataloader.CoordDataset,
+  "dgcnn": dataloader.CoordDataset,
+  "paconv": dataloader.CoordDataset,
+
+  
   "voxnet": dataloader.VoxelDataset,
   "deeprank": dataloader.VoxelDataset,
-  "pointnet": dataloader.CoordDataset,
-  "surface": dataloader.SurfDataset
+  "gnina": dataloader.VoxelDataset,
+
+  
+  "resnet": dataloader.HilbertCurveDataset,
+  "convnext": dataloader.HilbertCurveDataset,
+  "convnext_iso": dataloader.HilbertCurveDataset,
+  "swintrans": dataloader.HilbertCurveDataset,
+  "ViT": dataloader.HilbertCurveDataset,
+
+  "coord": dataloader.CoordDataset, 
+  "surface": dataloader.SurfDataset, 
 }
+
+
+
+
+def get_model(model_type:str, output_dim:int): 
+  if model_type == "pointnet":
+    model = PointNetCls(output_dim)
+
+  elif model_type == "pointnet2":
+    from feater.models.pointnet2 import get_model as _get_model
+    model = _get_model(output_dim, normal_channel=False)
+
+  elif model_type == "dgcnn":
+    from feater.models.dgcnn import DGCNN_cls
+    args = {
+      "k": 20, 
+      "emb_dims": 1024,
+      "dropout" : 0.25,
+    }
+    model = DGCNN_cls(args, output_channels=output_dim)
+  elif model_type == "paconv":
+    # NOTE: This is a special case due to the special dependency of the PAConv !!!!
+    if "/MieT5/tests/PAConv/obj_cls" not in sys.path:
+      sys.path.append("/MieT5/tests/PAConv/obj_cls")
+    from feater.models.paconv import PAConv
+    config = {
+      "k_neighbors": 20, 
+      "output_channels": output_dim,
+      "dropout": 0.25,
+    }
+    model = PAConv(config)
+  elif model_type == "voxnet":
+    from feater.models.voxnet import VoxNet
+    model = VoxNet(output_dim)
+  elif model_type == "deeprank":
+    from feater.models.deeprank import DeepRankNetwork
+    model = DeepRankNetwork(1, output_dim, 32)
+  elif model_type == "gnina":
+    from feater.models.gnina import GninaNetwork
+    model = GninaNetwork(output_dim)
+  elif model_type == "resnet":
+    from feater.models.resnet import ResNet
+    model = ResNet(1, output_dim, "resnet18")
+  elif model_type == "convnext":
+    from feater.models.convnext import ConvNeXt
+    """
+      in_chans=3, num_classes=1000, 
+      depths=[3, 3, 9, 3], dims=[96, 192, 384, 768], 
+      drop_path_rate=0.,  layer_scale_init_value=1e-6, 
+      head_init_scale=1.,
+    """
+    model = ConvNeXt(1, output_dim)
+
+  elif model_type == "convnext_iso":
+    from feater.models.convnext import ConvNeXt, ConvNeXtIsotropic
+    model = ConvNeXtIsotropic(1, output_dim)
+
+  elif model_type == "swintrans":
+    from transformers import SwinForImageClassification, SwinConfig
+    configuration = SwinConfig(
+      image_size = 128, 
+      num_channels = 1,
+      num_labels = output_dim,
+      window_size=4, 
+    )
+    model = SwinForImageClassification(configuration)
+
+  elif model_type == "ViT":
+    from transformers import ViTConfig, ViTForImageClassification
+    configuration = ViTConfig(
+      image_size = 128, 
+      num_channels = 1, 
+      num_labels = output_dim, 
+      window_size=4, 
+    )
+    model = ViTForImageClassification(configuration)
+
+  else:
+    raise ValueError(f"Unexpected model type {model_type}; Only voxnet, pointnet, resnet, and deeprank are supported")
+  return model
 
 
 def match_data(pred, label):  
@@ -75,15 +171,19 @@ def test_model(model, dataset, criterion, test_number, batch_size, use_cuda=1, p
       # Correct way to handle the input data
       # For the PointNet, the data is in the shape of (B, 3, N)
       # Important: Swap the axis to make the coordinate as 3 input channels of the data
-      if isinstance(model, PointNetCls) or isinstance(dataset, dataloader.CoordDataset):
+      if isinstance(dataset, dataloader.CoordDataset) or isinstance(dataset, dataloader.SurfDataset):
         data = data.transpose(2, 1)  
       if use_cuda:
         data, target = data.cuda(), target.cuda()
 
       pred = model(data)
 
-      if isinstance(model, PointNetCls) or isinstance(dataset, dataloader.CoordDataset):
+      if isinstance(model, PointNetCls) or isinstance(pred, tuple):
         pred = pred[0]
+      
+      # Get the logit if the huggingface models is used
+      if isinstance(pred, transformers.file_utils.ModelOutput): 
+        pred = pred.logits
       
       pred_choice = torch.argmax(pred, dim=1)
       correct += pred_choice.eq(target.data).cpu().sum()
@@ -100,14 +200,14 @@ def test_model(model, dataset, criterion, test_number, batch_size, use_cuda=1, p
 
 
 def parse_args():
-  parser = argparse.ArgumentParser(description="Train VoxNet")
+  parser = argparse.ArgumentParser(description="Train the models used in the FEater paper. ")
   # Model selection
   parser.add_argument("-m", "--model", type=str, required=True, help="The model to train")
   parser.add_argument("--optimizer", type=str, default="adam", help="The optimizer to use")
   parser.add_argument("--loss-function", type=str, default="crossentropy", help="The loss function to use")
   
 
-  # Data files
+  # Data files 
   parser.add_argument("-train", "--training-data", type=str, required=True, help="The file writes all of the absolute path of h5 files of training data set")
   parser.add_argument("-test", "--test-data", type=str, required=True, help="The file writes all of the absolute path of h5 files of test data set")
   parser.add_argument("-o", "--output_folder", type=str, required=True, help="The output folder to store the model and performance data")
@@ -120,6 +220,7 @@ def parse_args():
   parser.add_argument("--pretrained", type=str, default=None, help="Pretrained model path")
   parser.add_argument("--start-epoch", type=int, default=0, help="Start epoch")
 
+
   # Training parameters
   parser.add_argument("-b", "--batch-size", type=int, default=128, help="Batch size")
   parser.add_argument("-e", "--epochs", type=int, default=1, help="Number of epochs")
@@ -127,6 +228,7 @@ def parse_args():
   parser.add_argument("--lr-decay-steps", type=int, default=30, help="Decay the learning rate every n steps")
   parser.add_argument("--lr-decay-rate", type=float, default=0.5, help="Decay the learning rate by this rate")
   
+
   # Miscellanenous
   parser.add_argument("-v", "--verbose", default=0, type=int, help="Verbose printing while training")
   parser.add_argument("-s", "--manualSeed", type=int, help="Manually set seed")
@@ -135,7 +237,7 @@ def parse_args():
   parser.add_argument("--production", type=int, default=0, help="Production mode")
 
 
-  # Special parameters for the PointNet
+  # Special parameters for the point-cloud-like representations
   parser.add_argument("--pointnet_points", type=int, default=27, help="Num of points to use")
 
   args = parser.parse_args()  
@@ -148,6 +250,7 @@ def parse_args():
   if args.dataloader_type is None: 
     args.dataloader_type = args.model
 
+  update_pointnr(args.pointnet_points)
 
   if not args.manualSeed:
     args.seed = int(time.perf_counter().__str__().split(".")[-1])
@@ -173,21 +276,6 @@ def parse_args():
   return args
 
 
-def get_model(model_type:str, output_dim:int): 
-  if model_type == "voxnet":
-    model = VoxNet(output_dim)
-  elif model_type == "pointnet":
-    model = PointNetCls(output_dim)
-  elif model_type == "resnet":
-    # def get_resnet_model(channel_in, resnettype: str, class_nr:int, ):
-    model = ResNet(1, output_dim, "resnet18")
-  elif model_type == "deeprank":
-    model = DeepRankNetwork(1, output_dim, 32)
-  else:
-    raise ValueError(f"Unexpected model type {model_type}; Only voxnet, pointnet, resnet, and deeprank are supported")
-  return model
-
-
 def perform_training(training_settings: dict): 
   USECUDA = training_settings["cuda"]
   MODEL_TYPE = training_settings["model"]
@@ -205,7 +293,7 @@ def perform_training(training_settings: dict):
   # Load the datasets
   trainingfiles = utils.checkfiles(training_settings["training_data"])
   testfiles = utils.checkfiles(training_settings["test_data"])
-  if MODEL_TYPE == "pointnet" and training_settings["dataloader_type"] == "surface":
+  if training_settings["dataloader_type"] in ("surface", "coord"):
     training_data = DATALOADER_TYPES[training_settings["dataloader_type"]](trainingfiles, target_np=training_settings["pointnet_points"])
     test_data = DATALOADER_TYPES[training_settings["dataloader_type"]](testfiles, target_np=training_settings["pointnet_points"])
   elif MODEL_TYPE == "pointnet": 
@@ -237,20 +325,9 @@ def perform_training(training_settings: dict):
     elif isinstance(m, nn.Linear):
       print(f"Init Linear Layer {c}")
       nn.init.normal_(m.weight, 0, 0.1)
-      nn.init.constant_(m.bias, 0)
+      if m.bias is not None:
+        nn.init.constant_(m.bias, 0)
       c += 1
-
-
-  # tmp_data = training_data[1][0] # For testing the model
-  # print("before unsqueeze: ", tmp_data.shape, type(tmp_data))
-  # tmp_data = tmp_data.unsqueeze(0)
-  # print("after unsqueeze: ", tmp_data.shape, type(tmp_data))
-  # if isinstance(classifier, PointNetCls):
-  #   tmp_data = tmp_data.transpose(2, 1)
-  # print("after transpose: ", tmp_data.shape, type(tmp_data))
-  # tensorboard_writer.add_graph(classifier, tmp_data)
-
-
 
   if training_settings["pretrained"] and len(training_settings["pretrained"]) > 0:
     classifier.load_state_dict(torch.load(training_settings["pretrained"]))
@@ -258,12 +335,11 @@ def perform_training(training_settings: dict):
     classifier.cuda()
 
   optimizer = OPTIMIZERS.get(training_settings["optimizer"], optim.Adam)(classifier.parameters(), lr=training_settings["lr_init"], betas=(0.9, 0.999))
-  # Bad choice 
+  # Other choices (SGD not performing well)
   # optimizer = optim.SGD(classifier.parameters(), lr=training_settings["learning_rate"], momentum=0.5)
 
-  # The loss function in the original training is tf.losses.softmax_cross_entropy
+  # The loss function in the original training
   criterion = LOSS_FUNCTIONS.get(training_settings["loss_function"], nn.CrossEntropyLoss)()
-  # criterion = nn.CrossEntropyLoss()
 
   # Learning rate scheduler
   scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=training_settings["lr_decay_steps"], gamma=training_settings["lr_decay_rate"])
@@ -282,16 +358,24 @@ def perform_training(training_settings: dict):
       retrieval_time = time.perf_counter() - st
       st_tr = time.perf_counter()
       train_data, train_label = batch
-      if isinstance(classifier, PointNetCls) or isinstance(training_data, dataloader.CoordDataset):
-        train_data = train_data.transpose(2, 1)  
+      if isinstance(training_data, dataloader.CoordDataset) or isinstance(training_data, dataloader.SurfDataset):
+        train_data = train_data.transpose(2, 1) 
       
+      # print(train_data.shape)  # For test purpose
+
       if USECUDA:
         train_data, train_label = train_data.cuda(), train_label.cuda()
+
       optimizer.zero_grad()
       classifier = classifier.train()
       pred = classifier(train_data)
-      if isinstance(classifier, PointNetCls) or isinstance(training_data, dataloader.CoordDataset):
+      if isinstance(classifier, PointNetCls) or isinstance(pred, tuple):
         pred = pred[0]
+
+      # Get the logit if the huggingface models is used
+      if isinstance(pred, transformers.file_utils.ModelOutput): 
+        pred = pred.logits
+      # print(pred.shape, train_label.shape)  # For test purpose
 
       loss = criterion(pred, train_label)
       loss.backward()
@@ -303,7 +387,6 @@ def perform_training(training_settings: dict):
         loss_on_train, accuracy_on_train = test_model(classifier, training_data, criterion, 1500, BATCH_SIZE, USECUDA, WORKER_NR)
         loss_on_test, accuracy_on_test = test_model(classifier, test_data, criterion, 1500, BATCH_SIZE, USECUDA, WORKER_NR)
         print(f"Processing the block {batch_idx:>5d}/{batch_nr:<5d}; Loss: {loss_on_test:8.4f}/{loss_on_train:8.4f}; Accuracy: {accuracy_on_test:8.4f}/{accuracy_on_train:8.4f}; Time: {retrieval_time:8.4f}/{train_time:8.4f}; Time-left: {(retrieval_time+train_time) * (batch_nr - batch_idx):8.4f}")
-        # print(f"Checking the Performance on Loss:  at {time.ctime()}")
 
         if args.verbose > 0 or not args.production: 
           parmset = list(classifier.parameters())
@@ -318,8 +401,6 @@ def perform_training(training_settings: dict):
           tensorboard_writer.add_image(f"match/match", image, epoch * batch_nr + batch_idx)
           tensorboard_writer.add_histogram("dist/pred", torch.argmax(pred, dim=1), epoch * batch_nr + batch_idx)
           tensorboard_writer.add_histogram("dist/label", train_label, epoch * batch_nr + batch_idx)
-
-    # def test_model(model, dataset, criterion, test_number, batch_size, use_cuda=1, process_nr=32):
 
     # Test the model on both the training set and the test set
     loss_on_train, accuracy_on_train = test_model(classifier, training_data, criterion, training_settings["test_number"], BATCH_SIZE, USECUDA, WORKER_NR)
@@ -353,7 +434,6 @@ def perform_training(training_settings: dict):
 
 if __name__ == "__main__":
   """
-
   Train with 
   
   Train with pointnet-coord: 
@@ -367,10 +447,8 @@ if __name__ == "__main__":
 
   Training with ResNet
   python train_voxnet.py -m resnet -train /Weiss/FEater_Data/FEater_Minisets/tr_dual_hilb.txt -test /Weiss/FEater_Dual_HILB/te.txt -o /tmp/testresnet -w 24 -e 120 -b 128 -lr 0.005 --lr-decay-steps 30 --lr-decay-rate 0.5 --data-type dual
-
-
-
   """
+
   args = parse_args()
   SETTINGS = vars(args)
   _SETTINGS = json.dumps(SETTINGS, indent=2)

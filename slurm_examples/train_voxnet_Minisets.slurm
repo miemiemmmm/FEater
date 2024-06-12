@@ -47,7 +47,7 @@ test_file=$(python -c "import sys; filestr = sys.argv[1]; files=[i for i in file
 pretrained_model=""
 start_epoch=0
 
-total_epoch=1
+total_epoch=120
 batch_size=256
 
 lr_init=0.001
