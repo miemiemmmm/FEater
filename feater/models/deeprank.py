@@ -27,7 +27,7 @@ class DeepRankNetwork(torch.nn.Module):
         conv_layers[f'conv_{i:d}'] = torch.nn.Conv3d(input_channel_number, conv[i], kernel_size=2)
       else: 
         conv_layers[f'conv_{i:d}'] = torch.nn.Conv3d(conv[i-1], conv[i], kernel_size=2)
-      conv_layers[f'relu_{i:d}'] = torch.nn.ReLU()  
+      conv_layers[f'relu_{i:d}'] = torch.nn.ReLU() 
       conv_layers[f'pool_{i:d}'] = torch.nn.MaxPool3d((2, 2, 2)) 
     
     self.conv_blocks = torch.nn.Sequential(conv_layers)

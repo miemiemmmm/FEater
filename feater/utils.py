@@ -5,9 +5,9 @@ from numpy import ndarray, unique
 from torch import Tensor
 import torch.cuda
 import torch.nn.functional as F
-import matplotlib
+# import matplotlib
 # Use Agg backend for matplotlib for non-GUI environment
-matplotlib.use('Agg')
+# matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from . import constants

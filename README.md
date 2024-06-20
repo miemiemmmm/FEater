@@ -6,7 +6,7 @@ models to flexible and elastic objects.  -->
 ## Installation
 ### Compile from source
 ```
-micromamba activate env   # Assume micromamba as Python package manager, and environment named env
+micromamba activate env   # Assume micromamba being the package manager. Could replace with conda. 
 git clone https://github.com/miemiemmmm/FEater.git && cd FEater && make install
 ```
 To compile the module for voxel generation, NVCC (NVIDIA CUDA Compiler) is required. If CUDA runtime is not in the default path (/usr/local/cuda), for instance on a supercomputer, you might want to set the following environment variables to match the corresponding [GPU architecture](https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html#gpu-feature-list). 
@@ -30,19 +30,16 @@ The coordinate feature, identified by the suffix **_PDB.tar.gz**, is stored in H
 
 **Miniset** contains a tiny subset of the training data used in [FEater research](https://zenodo.org/records/10593541/files/FEater_paper.pdf), 
 
-## Visual inspection of dataset
-The following console tools, including **viewcoord**, **viewsurf**, **viewvoxel**, are provided for visual inspection in to the dataset. [Open3D](https://www.open3d.org/) is required to render different molecular representations. 
-
-Some example commands are as follow: 
 ```
-viewcoord -f TestSet_Dataset.h5 -i 15 -t 1 -m 0
-viewsurf -f ValidationSet_Surface.h5 -i 15
-viewvoxel -f TestSet_Voxel.h5 -i 15 -r XXXX_Dataset.h5
+make download
 ```
 
-## Data loading, iteration and spliting
 
+## Dataset subsetting
 
+```bash 
+bash feater/scripts/generate_miniset.py
+```
 
 
 ## Feature generation 
@@ -56,6 +53,27 @@ Surface generation requires the installation of [SiESTA-Surf](https://github.com
 See [slurm examples](slurm_examples/) for batch featurization. 
 
 <!-- ## Personalized featurization -->
+
+
+## Data loading, iteration and spliting
+
+
+
+## Visual inspection of dataset
+The following console tools, including **viewcoord**, **viewsurf**, **viewvoxel**, are provided for visual inspection in to the dataset. [Open3D](https://www.open3d.org/) is required to render different molecular representations. 
+
+Some example commands are as follow: 
+```
+viewcoord -f TestSet_Dataset.h5 -i 15 -t 1 -m 0
+viewsurf -f ValidationSet_Surface.h5 -i 15
+viewvoxel -f TestSet_Voxel.h5 -i 15 -r XXXX_Dataset.h5
+```
+
+
+
+
+
+
 
 
 
@@ -75,10 +93,6 @@ Bibtex style
   doi = {10.5281/zenodo.10593541},
   url = {https://doi.org/10.5281/zenodo.10593541}
 }
-```
-APA style:
-```
-Zhang, Y., & Vitalis, A. (2024). FEater: A large-scale 3D molecular conformation dataset to measure the geometric invariance of models (0.1.0) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.10593541
 ```
 
 ## Useful URLs

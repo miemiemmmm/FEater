@@ -17,9 +17,7 @@ class VoxNet(nn.Module):
   The higgen layer in the fully connected layer is changed to 1280
   Dropout rate changed from [0.2, 0.3, 0.4] to [0.1, 0.1, 0.1]
   """
-  def __init__(self, 
-               n_classes=10, 
-               input_shape=(32, 32, 32)):
+  def __init__(self, n_classes=10, input_shape=(32, 32, 32)):
     super(VoxNet, self).__init__()
     dropout_rates = [0.1, 0.1, 0.1]
     self.n_classes = n_classes
@@ -63,8 +61,3 @@ class VoxNet(nn.Module):
     self.eval()
 
 
-
-if __name__ == "__main__":
-  voxnet = VoxNet()
-  data = torch.rand([256, 1, 32, 32, 32])
-  voxnet(data)

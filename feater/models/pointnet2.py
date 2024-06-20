@@ -322,12 +322,18 @@ class PointNetFeaturePropagation(nn.Module):
 
 
 class get_model(nn.Module):
-    def __init__(self,num_class,normal_channel=True):
+    """
+    PointNet2 with single-scale grouping
+    Change number of point to sample in the first SetAbstraction layer
+    Change radius assignment for the first two SetAbstraction layers 
+    """
+    def __init__(self,num_class,normal_channel=True, sample_nr=32, rads=[1.75, 2.55]):
         super(get_model, self).__init__()
         in_channel = 6 if normal_channel else 3
+        sample_nr = min(32, sample_nr)    # if the number of points is less than 32, sample all points
         self.normal_channel = normal_channel
-        self.sa1 = PointNetSetAbstraction(npoint=512, radius=0.2, nsample=32, in_channel=in_channel, mlp=[64, 64, 128], group_all=False)
-        self.sa2 = PointNetSetAbstraction(npoint=128, radius=0.4, nsample=64, in_channel=128 + 3, mlp=[128, 128, 256], group_all=False)
+        self.sa1 = PointNetSetAbstraction(npoint=512, radius=rads[0], nsample=sample_nr, in_channel=in_channel, mlp=[64, 64, 128], group_all=False)
+        self.sa2 = PointNetSetAbstraction(npoint=128, radius=rads[1], nsample=64, in_channel=128 + 3, mlp=[128, 128, 256], group_all=False)
         self.sa3 = PointNetSetAbstraction(npoint=None, radius=None, nsample=None, in_channel=256 + 3, mlp=[256, 512, 1024], group_all=True)
         self.fc1 = nn.Linear(1024, 512)
         self.bn1 = nn.BatchNorm1d(512)
@@ -338,12 +344,13 @@ class get_model(nn.Module):
         self.fc3 = nn.Linear(256, num_class)
 
     def forward(self, xyz):
-        B, _, _ = xyz.shape
+        B, pointdim, pointnr = xyz.shape
         if self.normal_channel:
             norm = xyz[:, 3:, :]
             xyz = xyz[:, :3, :]
         else:
             norm = None
+        
         l1_xyz, l1_points = self.sa1(xyz, norm)
         l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
         l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
@@ -356,23 +363,10 @@ class get_model(nn.Module):
         return x, l3_points
 
 
-
-# class get_loss(nn.Module):
-#     def __init__(self):
-#         super(get_loss, self).__init__()
-
-#     def forward(self, pred, target, trans_feat):
-#         total_loss = F.nll_loss(pred, target)
-
-#         return total_loss
-
-
-# import torch.nn as nn
-# import torch.nn.functional as F
-# from pointnet2_utils import PointNetSetAbstractionMsg, PointNetSetAbstraction
-
-
 # class get_model(nn.Module):
+#     """
+#     PointNet2 with multi-scale grouping
+#     """
 #     def __init__(self,num_class,normal_channel=True):
 #         super(get_model, self).__init__()
 #         in_channel = 3 if normal_channel else 0
@@ -389,12 +383,17 @@ class get_model(nn.Module):
 #         self.fc3 = nn.Linear(256, num_class)
 
 #     def forward(self, xyz):
-#         B, _, _ = xyz.shape
+#         B, pointdim, pointnr = xyz.shape
 #         if self.normal_channel:
 #             norm = xyz[:, 3:, :]
 #             xyz = xyz[:, :3, :]
 #         else:
 #             norm = None
+
+#         if pointnr < 32:
+#             zero = torch.zeros(B, 3, 32-xyz.shape[2]).to(xyz.device)
+#             xyz = torch.cat([xyz, zero], dim=-1)
+
 #         l1_xyz, l1_points = self.sa1(xyz, norm)
 #         l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
 #         l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
@@ -408,11 +407,3 @@ class get_model(nn.Module):
 #         return x,l3_points
 
 
-# class get_loss(nn.Module):
-#     def __init__(self):
-#         super(get_loss, self).__init__()
-
-#     def forward(self, pred, target, trans_feat):
-#         total_loss = F.nll_loss(pred, target)
-
-#         return total_loss

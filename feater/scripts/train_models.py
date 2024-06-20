@@ -8,8 +8,6 @@ from PIL import Image
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.utils.data as data
-import torch.nn.functional as F
 import torchvision
 import transformers
 
@@ -20,17 +18,22 @@ from feater.models.pointnet import PointNetCls
 from feater import dataloader, utils
 import feater
 
-tensorboard_writer = SummaryWriter("/diskssd/yzhang/FEater_Minisets/tensorboard")
+tensorboard_writer = None 
 
 # For point cloud type of data, the input is in the shape of (B, 3, N)
-INPUT_POINTS = 27
+INPUT_POINTS = 0
 def update_pointnr(pointnr):
   global INPUT_POINTS
   INPUT_POINTS = pointnr
+DATALOADER_TYPE = ""
+def update_dataloader_type(dataloader_type):
+  global DATALOADER_TYPE
+  DATALOADER_TYPE = dataloader_type
 
 OPTIMIZERS = {
   "adam": optim.Adam, 
-  "sgd": optim.SGD
+  "sgd": optim.SGD,
+  "adamw": optim.AdamW,
 }
 
 LOSS_FUNCTIONS = {
@@ -67,9 +70,16 @@ def get_model(model_type:str, output_dim:int):
     model = PointNetCls(output_dim)
 
   elif model_type == "pointnet2":
-    from feater.models.pointnet2 import get_model as _get_model
-    model = _get_model(output_dim, normal_channel=False)
-
+    from feater.models.pointnet2 import get_model as get_pointnet2_model
+    if DATALOADER_TYPE == "surface": 
+      rads = [0.35, 0.75]  # For surface-based training
+    elif DATALOADER_TYPE == "coord":
+      rads = [1.75, 3.60]  # For coordinate-based data
+    else: 
+      raise ValueError(f"Unexpected dataloader type {DATALOADER_TYPE} for PointNet2 model; Only surface and coord are supported")
+    print(f"Using the radii {rads} for the PointNet2 model")
+    model = get_pointnet2_model(output_dim, normal_channel=False, sample_nr = INPUT_POINTS, rads=rads)
+    
   elif model_type == "dgcnn":
     from feater.models.dgcnn import DGCNN_cls
     args = {
@@ -171,6 +181,8 @@ def test_model(model, dataset, criterion, test_number, batch_size, use_cuda=1, p
       # Correct way to handle the input data
       # For the PointNet, the data is in the shape of (B, 3, N)
       # Important: Swap the axis to make the coordinate as 3 input channels of the data
+      # print(target.unique(return_counts=True))
+
       if isinstance(dataset, dataloader.CoordDataset) or isinstance(dataset, dataloader.SurfDataset):
         data = data.transpose(2, 1)  
       if use_cuda:
@@ -238,7 +250,7 @@ def parse_args():
 
 
   # Special parameters for the point-cloud-like representations
-  parser.add_argument("--pointnet_points", type=int, default=27, help="Num of points to use")
+  parser.add_argument("--pointnet-points", type=int, default=0, help="Num of points to use")
 
   args = parser.parse_args()  
   if not os.path.exists(args.training_data): 
@@ -251,6 +263,7 @@ def parse_args():
     args.dataloader_type = args.model
 
   update_pointnr(args.pointnet_points)
+  update_dataloader_type(args.dataloader_type)
 
   if not args.manualSeed:
     args.seed = int(time.perf_counter().__str__().split(".")[-1])
@@ -307,6 +320,14 @@ def perform_training(training_settings: dict):
   classifier = get_model(MODEL_TYPE, training_settings["class_nr"])
   print(f"Classifier: {classifier}")
 
+  # if (args.verbose > 0) or (not args.production): 
+  #   if MODEL_TYPE in ["pointnet", "pointnet2", "dgcnn", "paconv"]:
+  #     tensorboard_writer.add_graph(classifier, torch.randn(1, 3, INPUT_POINTS))
+  #   elif MODEL_TYPE in ["voxnet", "deeprank", "gnina"]:
+  #     tensorboard_writer.add_graph(classifier, torch.randn(1, 1, 32, 32, 32))
+  #   elif MODEL_TYPE in ["resnet", "convnext", "convnext_iso", "swintrans", "ViT"]:
+  #     tensorboard_writer.add_graph(classifier, torch.randn(1, 1, 128, 128))
+
 
   # Use KaiMing He's initialization
   c = 0
@@ -334,6 +355,8 @@ def perform_training(training_settings: dict):
   if USECUDA:
     classifier.cuda()
 
+  if training_settings["optimizer"] not in OPTIMIZERS:
+    print(f"Unexpected optimizer {training_settings['optimizer']}; Using Adam by default. ")
   optimizer = OPTIMIZERS.get(training_settings["optimizer"], optim.Adam)(classifier.parameters(), lr=training_settings["lr_init"], betas=(0.9, 0.999))
   # Other choices (SGD not performing well)
   # optimizer = optim.SGD(classifier.parameters(), lr=training_settings["learning_rate"], momentum=0.5)
@@ -345,34 +368,33 @@ def perform_training(training_settings: dict):
   scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=training_settings["lr_decay_steps"], gamma=training_settings["lr_decay_rate"])
   
   print(f"Number of parameters: {sum([p.numel() for p in classifier.parameters()])}")
-  _loss_test_cache = []
-  _loss_train_cache = []
-  _accuracy_test_cache = []
-  _accuracy_train_cache = []
-  for epoch in range(START_EPOCH, EPOCH_NR): 
+  for epoch in range(0, EPOCH_NR): 
+    if (epoch < START_EPOCH): 
+      print(f"Skip the epoch {epoch}/{START_EPOCH} ...")
+      scheduler.step()
+      continue
     st = time.perf_counter()
+    st_training = time.perf_counter()
     message = f" Running the epoch {epoch:>4d}/{EPOCH_NR:<4d} at {time.ctime()} "
     print(f"{message:#^80}")
     batch_nr = (len(training_data) + BATCH_SIZE - 1) // BATCH_SIZE
     for batch_idx, batch in enumerate(training_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR)):
       retrieval_time = time.perf_counter() - st
-      st_tr = time.perf_counter()
       train_data, train_label = batch
       if isinstance(training_data, dataloader.CoordDataset) or isinstance(training_data, dataloader.SurfDataset):
         train_data = train_data.transpose(2, 1) 
       
       # print(train_data.shape)  # For test purpose
-
+      st_tr = time.perf_counter()
       if USECUDA:
         train_data, train_label = train_data.cuda(), train_label.cuda()
-
       optimizer.zero_grad()
       classifier = classifier.train()
       pred = classifier(train_data)
       if isinstance(classifier, PointNetCls) or isinstance(pred, tuple):
         pred = pred[0]
 
-      # Get the logit if the huggingface models is used
+      # Get the logit if the huggingface models is used 
       if isinstance(pred, transformers.file_utils.ModelOutput): 
         pred = pred.logits
       # print(pred.shape, train_label.shape)  # For test purpose
@@ -381,56 +403,70 @@ def perform_training(training_settings: dict):
       loss.backward()
       optimizer.step()
       train_time = time.perf_counter() - st_tr
-      st = time.perf_counter()
-      # tensorboard_writer.add_scalar("global/TrainLoss", loss.item(),   epoch * batch_nr + batch_idx)
-      if batch_idx % (batch_nr // 15) == 0:
-        loss_on_train, accuracy_on_train = test_model(classifier, training_data, criterion, 1500, BATCH_SIZE, USECUDA, WORKER_NR)
-        loss_on_test, accuracy_on_test = test_model(classifier, test_data, criterion, 1500, BATCH_SIZE, USECUDA, WORKER_NR)
-        print(f"Processing the block {batch_idx:>5d}/{batch_nr:<5d}; Loss: {loss_on_test:8.4f}/{loss_on_train:8.4f}; Accuracy: {accuracy_on_test:8.4f}/{accuracy_on_train:8.4f}; Time: {retrieval_time:8.4f}/{train_time:8.4f}; Time-left: {(retrieval_time+train_time) * (batch_nr - batch_idx):8.4f}")
+      
+      if batch_idx % (batch_nr // 15) == 0:  
+        loss_on_train, accuracy_on_train = test_model(classifier, training_data, criterion, 1024, BATCH_SIZE, USECUDA, WORKER_NR)
+        loss_on_test, accuracy_on_test = test_model(classifier, test_data, criterion, 1024, BATCH_SIZE, USECUDA, WORKER_NR)
+        jobmsg = f"Processing the block {batch_idx:>5d}/{batch_nr:<5d}; Loss: {loss_on_test:>6.4f}/{loss_on_train:<6.4f}; Accuracy: {accuracy_on_test:>6.4f}/{accuracy_on_train:<6.4f}; Time: {retrieval_time:>6.4f}/{train_time:<6.4f}; "
+        if batch_idx > 0: 
+          time_left = (time.perf_counter() - st_training) / (batch_idx + 1) * (batch_nr - batch_idx)
+          jobmsg += f"Time-left: {time_left:5.0f}s; "
+        print(jobmsg)
 
-        if args.verbose > 0 or not args.production: 
-          parmset = list(classifier.parameters())
+        if (args.verbose > 0) or (not args.production): 
+          tensorboard_writer.add_scalar(f"Accuracy/tr_onfly", accuracy_on_train, epoch * batch_nr + batch_idx)
+          tensorboard_writer.add_scalar(f"Accuracy/te_onfly", accuracy_on_test, epoch * batch_nr + batch_idx)
+          parmset = list(classifier.named_parameters())
           for idx, p in enumerate(parmset):
+            pname = p[0]
+            p = p[1]
             if p.grad is not None:
               grad_norm = p.grad.norm()
-              tensorboard_writer.add_scalar(f"global/grad{idx}", grad_norm, epoch * batch_nr + batch_idx)
-              tensorboard_writer.add_histogram(f"global/gradhist{idx}", p.grad.cpu().detach().numpy(), epoch * batch_nr + batch_idx)
-          # Add the activation of the final layer with the second column as the actual label
-          
+              tensorboard_writer.add_scalar(f"global/grad{idx}_{pname}", grad_norm, epoch * batch_nr + batch_idx)
+              tensorboard_writer.add_histogram(f"global/gradhist{idx}_{pname}", p.grad.cpu().detach().numpy(), epoch * batch_nr + batch_idx)
           image = match_data(pred, train_label)
           tensorboard_writer.add_image(f"match/match", image, epoch * batch_nr + batch_idx)
-          tensorboard_writer.add_histogram("dist/pred", torch.argmax(pred, dim=1), epoch * batch_nr + batch_idx)
-          tensorboard_writer.add_histogram("dist/label", train_label, epoch * batch_nr + batch_idx)
+          tensorboard_writer.add_histogram("dist/pred", torch.argmax(pred, dim=1), epoch * batch_nr + batch_idx, bins=np.arange(-0.5, training_settings["class_nr"] + 0.5, 1))
+          tensorboard_writer.add_histogram("dist/label", train_label, epoch * batch_nr + batch_idx, bins=np.arange(-0.5, training_settings["class_nr"] + 0.5, 1))
+
+      st = time.perf_counter()
 
     # Test the model on both the training set and the test set
+    scheduler.step()
     loss_on_train, accuracy_on_train = test_model(classifier, training_data, criterion, training_settings["test_number"], BATCH_SIZE, USECUDA, WORKER_NR)
     loss_on_test, accuracy_on_test = test_model(classifier, test_data, criterion, training_settings["test_number"], BATCH_SIZE, USECUDA, WORKER_NR)
-    current_lr = get_lr(optimizer)
-
     print(f"Checking the Performance on Loss: {loss_on_test}/{loss_on_train}; Accuracy: {accuracy_on_test}/{accuracy_on_train} at {time.ctime()}")
-    tensorboard_writer.add_scalar("Loss/Train", torch.mean(torch.tensor(_loss_train_cache)), epoch)
-    tensorboard_writer.add_scalar("Accuracy/Train", torch.mean(torch.tensor(_accuracy_train_cache)), epoch)
-    tensorboard_writer.add_scalar("Loss/Test", torch.mean(torch.tensor(_loss_test_cache)), epoch)
-    tensorboard_writer.add_scalar("Accuracy/Test", torch.mean(torch.tensor(_accuracy_test_cache)), epoch)
-    tensorboard_writer.add_scalar("LearningRate", current_lr, epoch)
-
-    _loss_test_cache.append(loss_on_test)
-    _loss_train_cache.append(loss_on_train)
-    _accuracy_test_cache.append(accuracy_on_test)
-    _accuracy_train_cache.append(accuracy_on_train)
-
-    scheduler.step()
+    current_lr = get_lr(optimizer)
+    
     # Save the model  
     modelfile_output = os.path.join(os.path.abspath(training_settings["output_folder"]), f"{MODEL_TYPE}_{epoch}.pth")
     print(f"Saving the model to {modelfile_output} ...")
     torch.save(classifier.state_dict(), modelfile_output)
+    
+    if (args.verbose > 0) or (not args.production):
+      tensorboard_writer.add_scalar("Loss/Train", loss_on_train, epoch)
+      tensorboard_writer.add_scalar("Accuracy/Train", accuracy_on_train, epoch)
+      tensorboard_writer.add_scalar("Loss/Test", loss_on_test, epoch)
+      tensorboard_writer.add_scalar("Accuracy/Test", accuracy_on_test, epoch)
+      tensorboard_writer.add_scalar("LearningRate", current_lr, epoch)
 
     # Save the performance to a HDF5 file
     with feater.io.hdffile(os.path.join(training_settings["output_folder"], "performance.h5") , "a") as hdffile:
-      utils.update_hdf_by_slice(hdffile, "loss_train", np.array([np.mean(_loss_train_cache)], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, )) 
-      utils.update_hdf_by_slice(hdffile, "loss_test", np.array([np.mean(_loss_test_cache)], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
-      utils.update_hdf_by_slice(hdffile, "accuracy_train", np.array([np.mean(_accuracy_train_cache)], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
-      utils.update_hdf_by_slice(hdffile, "accuracy_test", np.array([np.mean(_accuracy_test_cache)], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
+      utils.update_hdf_by_slice(hdffile, "loss_train", np.array([loss_on_train], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, )) 
+      utils.update_hdf_by_slice(hdffile, "loss_test", np.array([loss_on_test], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
+      utils.update_hdf_by_slice(hdffile, "accuracy_train", np.array([accuracy_on_train], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
+      utils.update_hdf_by_slice(hdffile, "accuracy_test", np.array([accuracy_on_test], dtype=np.float64), np.s_[epoch:epoch+1], dtype=np.float64, maxshape=(None, ))
+
+    # Early stopping on low accuracy (model did not learn anything at all)
+    # Potential incorrect initialization or hyperparameters
+    if (epoch > 0.25 * EPOCH_NR) and (accuracy_on_train < 0.1): 
+      print(f"Early stopping at epoch {epoch} due to the extreme low accuracy on the training set (accuracy < 0.1)")
+      print(f"Please check if hyperparameters are set correctly or the initialization of the model is correct. ")
+      break
+    # Early stopping on high accuracy to avoid overfitting
+    if accuracy_on_test > 0.995: 
+      print(f"Early stopping at epoch {epoch} due to the high accuracy on the test set (accuracy > 0.995)")
+      break
 
 if __name__ == "__main__":
   """
@@ -457,15 +493,11 @@ if __name__ == "__main__":
 
   with open(os.path.join(SETTINGS["output_folder"], "settings.json"), "w") as f:
     f.write(_SETTINGS)
+  
+  if (args.verbose > 0) or (not args.production): 
+    if not os.path.exists(os.path.join(SETTINGS["output_folder"], "tensorboard")): 
+      os.makedirs(os.path.join(SETTINGS["output_folder"], "tensorboard")) 
+    tensorboard_writer = SummaryWriter(os.path.join(SETTINGS["output_folder"], "tensorboard"))
 
   perform_training(SETTINGS)
 
-
-
-# train_file="/diskssd/yzhang/FEater_Minisets/miniset_800/te_coord.txt"
-# test_file="/Weiss/FEater_Dual_PDBHDF/te.txt"
-# outdir="/diskssd/yzhang/FEater_Minisets/pointnetcrd_800"
-
-# train_file="/Weiss/FEater_Data/FEater_Minisets/tr_single_vox.txt"
-# test_file="/Weiss/FEater_Single_VOX/te.txt"
-# outdir="/diskssd/yzhang/FEater_data/results_single_vox_miniset"

@@ -1,3 +1,6 @@
+"""
+Convert the voxel data to Hilbert curve representation
+"""
 import time, os, sys, argparse, json
 
 import numpy as np

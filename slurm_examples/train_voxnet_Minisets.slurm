@@ -8,6 +8,8 @@
 #SBATCH --cpus-per-task=12
 
 
+##### Obsolete #####
+
 source /home/yzhang/mamba/bin/loadmamba
 micromamba activate pointnet_torch
 export PYTHONUNBUFFERED=1
@@ -48,7 +50,7 @@ pretrained_model=""
 start_epoch=0
 
 total_epoch=120
-batch_size=256
+batch_size=64
 
 lr_init=0.001
 lr_decay_steps=30

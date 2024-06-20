@@ -7,6 +7,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
 
+##### Obsolete #####
 
 source /home/yzhang/mamba/bin/loadmamba
 micromamba activate pointnet_torch
@@ -48,11 +49,11 @@ pretrained_model=""
 start_epoch=0
 
 total_epoch=120
-batch_size=256
+batch_size=64
 
 # Improve the initial learning rate and accelerate the learning rate decay
-lr_init=0.002
-lr_decay_steps=5
+lr_init=0.001
+lr_decay_steps=30
 lr_decay_rate=0.5
 
 

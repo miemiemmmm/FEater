@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -9,6 +10,38 @@ Code adopted from:
 https://github.com/gnina/models/blob/master/pytorch/default2018_model.py
 """
 
+class GninaNetwork(nn.Module):
+    def __init__(self, out_dims):
+        super(GninaNetwork, self).__init__()
+        input_channels = 1
+        grid_dims = [32, 32, 32]
+        self.features = nn.Sequential(
+            nn.AvgPool3d(2,stride=2),                                           # avgpool_0
+            nn.Conv3d(input_channels, out_channels=32,padding=1,kernel_size=3,stride=1),    # unit1_conv
+            nn.ReLU(),
+            nn.Conv3d(32, out_channels=32,padding=0,kernel_size=1,stride=1),    # unit2_conv
+            nn.ReLU(),
+            nn.AvgPool3d(2,stride=2),                                           # avgpool_1
+            nn.Conv3d(32, out_channels=64,padding=1,kernel_size=3,stride=1),    # unit3_conv
+            nn.ReLU(),
+            nn.Conv3d(64, out_channels=64,padding=0,kernel_size=1,stride=1),    # unit4_conv
+            nn.ReLU(),
+            nn.AvgPool3d(2,stride=2),                                           # avgpool_2
+            nn.Conv3d(64, out_channels=128,padding=1,kernel_size=3,stride=1),   # unit5_conv
+            nn.ReLU(),
+        )
+        dummy_output = self.features(torch.zeros(1, input_channels, grid_dims[0], grid_dims[1], grid_dims[2]))
+        flattened_feature_size = dummy_output.flatten().size()[0]
+        self.affinity_output = nn.Linear(flattened_feature_size, out_dims)
+
+    def forward(self, x): 
+        x = self.features(x)
+        x = nn.Flatten()(x)
+        affinity = self.affinity_output(x)
+        return affinity
+            
+
+
 class View(nn.Module):
     def __init__(self,shape):
         super(View, self).__init__()
@@ -16,7 +49,7 @@ class View(nn.Module):
     def forward(self, input):
         return input.view(*self.shape)
 
-class GninaNetwork(nn.Module):
+class _GninaNetwork(nn.Module):
     def __init__(self, out_dims):
         super(GninaNetwork, self).__init__()
         self.modules_ = []
@@ -55,12 +88,12 @@ class GninaNetwork(nn.Module):
         flattener = View((-1,last_size))
         self.add_module('flatten',flattener)
         self.modules_.append(flattener)
-        self.affinity_output = nn.Linear(last_size,out_dims)
+        self.affinity_output = nn.Linear(last_size, out_dims)
         # self.pose_output = nn.Linear(last_size,2)
 
     def forward(self, x): #should approximate the affinity of the receptor/ligand pair
         for layer in self.modules_:
-            x= layer(x)
+            x = layer(x)
             if isinstance(layer,nn.Conv3d):
                 x=self.func(x)
         affinity = self.affinity_output(x)

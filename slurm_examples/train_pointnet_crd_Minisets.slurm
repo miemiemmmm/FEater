@@ -8,6 +8,8 @@
 #SBATCH --cpus-per-task=24
 
 
+##### Obsolete #####
+
 source /home/yzhang/mamba/bin/loadmamba
 micromamba activate pointnet_torch
 export PYTHONUNBUFFERED=1
@@ -55,11 +57,26 @@ test_file=$(python -c "import sys; filestr = sys.argv[1]; files=[i for i in file
 target_point_nr=$(python -c "import sys; filestr = sys.argv[1]; files=[i for i in filestr.strip().strip('%').split('%') if len(i) > 0]; idx = int(sys.argv[2]); print(files[idx])" "${point_numbers}" "${SLURM_ARRAY_TASK_ID}")
 
 
+loader_type="coord"
+# single coord -> 24, dual coord > 42, single surf -> 1500, dual surf -> 2000
+if [[ "${data_type}" == "single" ]] && [[ "${loader_type}" == "coord" ]]; then 
+  point_nr=24
+elif [[ "${data_type}" == "dual" ]] && [[ "${loader_type}" == "coord" ]]; then 
+  point_nr=42
+elif [[ "${data_type}" == "single" ]] && [[ "${loader_type}" == "surface" ]]; then 
+  point_nr=1500
+elif [[ "${data_type}" == "dual" ]] && [[ "${loader_type}" == "surface" ]]; then 
+  point_nr=1500
+else
+  point_nr=0
+fi
+
+
 pretrained_model=""
 start_epoch=0
 
 total_epoch=120
-batch_size=256
+batch_size=64
 
 
 lr_init=0.001

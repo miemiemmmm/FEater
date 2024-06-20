@@ -11,3 +11,11 @@ runpdb:
 compile:
 		cd src && make voxelize.so
 
+download_all:
+		mkdir -p data && cd data \
+		&& wget https://zenodo.org/api/records/10593541/files-archive -O FEater_Data.zip \
+		&& unzip FEater_Data.zip 
+
+download_miniset: 
+		mkdir -p data/miniset && cd data \
+		&& echo "Downloading miniset" \

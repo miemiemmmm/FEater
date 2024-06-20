@@ -35,7 +35,7 @@ def make_hdf(hdf_name:str, coord_files:list, kwargs):
     RES_LAB_MAP = constants.RES2LAB_DUAL 
     KEY_LENGTH = 6
   elif kwargs["mode"] == "single":
-    RES_LAB_MAP = constants.RES2LAB         # TODO: check this 
+    RES_LAB_MAP = constants.RES2LAB
     KEY_LENGTH = 3
 
   if os.path.exists(hdf_name):
@@ -81,6 +81,7 @@ def make_hdf(hdf_name:str, coord_files:list, kwargs):
         f["entry_number"][0] += len(label_buffer)
   pool.close()
   pool.join()
+
   print("Doing final checking of the HDF file")
   with io.hdffile(hdf_name, "r") as f:
     f.draw_structure()
@@ -136,6 +137,7 @@ def console_interface():
 
 if __name__ == "__main__":
   console_interface()
+  
   # hdf_output = "test.hdf5"
   # file_list = "/MieT5/tests/FEater/feater/scripts/tmpflist.txt"
   # files = checkfiles(file_list)
