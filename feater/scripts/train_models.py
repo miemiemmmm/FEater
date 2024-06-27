@@ -72,7 +72,7 @@ def get_model(model_type:str, output_dim:int):
   elif model_type == "pointnet2":
     from feater.models.pointnet2 import get_model as get_pointnet2_model
     if DATALOADER_TYPE == "surface": 
-      rads = [0.35, 0.75]  # For surface-based training
+      rads = [0.5, 1.00]  # For surface-based training
     elif DATALOADER_TYPE == "coord":
       rads = [1.75, 3.60]  # For coordinate-based data
     else: 
@@ -328,7 +328,6 @@ def perform_training(training_settings: dict):
   #   elif MODEL_TYPE in ["resnet", "convnext", "convnext_iso", "swintrans", "ViT"]:
   #     tensorboard_writer.add_graph(classifier, torch.randn(1, 1, 128, 128))
 
-
   # Use KaiMing He's initialization
   c = 0
   for m in classifier.modules():
@@ -369,12 +368,13 @@ def perform_training(training_settings: dict):
   
   print(f"Number of parameters: {sum([p.numel() for p in classifier.parameters()])}")
   for epoch in range(0, EPOCH_NR): 
+    st = time.perf_counter()
+    st_training = time.perf_counter()
     if (epoch < START_EPOCH): 
       print(f"Skip the epoch {epoch}/{START_EPOCH} ...")
       scheduler.step()
+      print(f"Epoch {epoch} took {time.perf_counter() - st_training:6.2f} seconds to train. Current learning rate: {get_lr(optimizer):.6f}. ")
       continue
-    st = time.perf_counter()
-    st_training = time.perf_counter()
     message = f" Running the epoch {epoch:>4d}/{EPOCH_NR:<4d} at {time.ctime()} "
     print(f"{message:#^80}")
     batch_nr = (len(training_data) + BATCH_SIZE - 1) // BATCH_SIZE
@@ -404,7 +404,7 @@ def perform_training(training_settings: dict):
       optimizer.step()
       train_time = time.perf_counter() - st_tr
       
-      if batch_idx % (batch_nr // 15) == 0:  
+      if batch_idx % (batch_nr // 8) == 0: 
         loss_on_train, accuracy_on_train = test_model(classifier, training_data, criterion, 1024, BATCH_SIZE, USECUDA, WORKER_NR)
         loss_on_test, accuracy_on_test = test_model(classifier, test_data, criterion, 1024, BATCH_SIZE, USECUDA, WORKER_NR)
         jobmsg = f"Processing the block {batch_idx:>5d}/{batch_nr:<5d}; Loss: {loss_on_test:>6.4f}/{loss_on_train:<6.4f}; Accuracy: {accuracy_on_test:>6.4f}/{accuracy_on_train:<6.4f}; Time: {retrieval_time:>6.4f}/{train_time:<6.4f}; "
@@ -433,6 +433,7 @@ def perform_training(training_settings: dict):
 
     # Test the model on both the training set and the test set
     scheduler.step()
+    print(f"Epoch {epoch} took {time.perf_counter() - st_training:6.2f} seconds to train. Current learning rate: {get_lr(optimizer):.6f}. ")
     loss_on_train, accuracy_on_train = test_model(classifier, training_data, criterion, training_settings["test_number"], BATCH_SIZE, USECUDA, WORKER_NR)
     loss_on_test, accuracy_on_test = test_model(classifier, test_data, criterion, training_settings["test_number"], BATCH_SIZE, USECUDA, WORKER_NR)
     print(f"Checking the Performance on Loss: {loss_on_test}/{loss_on_train}; Accuracy: {accuracy_on_test}/{accuracy_on_train} at {time.ctime()}")

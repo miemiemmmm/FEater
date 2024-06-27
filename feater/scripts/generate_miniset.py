@@ -1,3 +1,7 @@
+"""
+Generate a mini-set for the feater dataset 
+"""
+
 import json, os, time
 import h5py
 import numpy as np
@@ -101,13 +105,19 @@ def generate_coord_miniset(sourcefile, minisetoutput, indicefile, label_nr, forc
       start_idxs_buffer = end_idxs_buffer - nr_atoms_buffer
 
       with feater.io.hdffile(minisetoutput, "a") as hdf:
-        utils.add_data_to_hdf(hdf, "coordinates", coord_buffer, dtype=np.float32, maxshape=[None, 3], chunks=True, compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(hdf, "elements", elems_buffer, dtype=np.int32, maxshape=[None], chunks=True, compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(hdf, "atom_number", nr_atoms_buffer, dtype=np.int32, maxshape=[None], chunks=True, compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(hdf, "label", label_buffer, dtype=np.int32, maxshape=[None], chunks=True, compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(hdf, "coord_starts", start_idxs_buffer, dtype=np.uint64, maxshape=[None], chunks=True, compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(hdf, "coord_ends", end_idxs_buffer, dtype=np.uint64, maxshape=[None], chunks=True, compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(hdf, "topology_key", key_buffer, dtype=h5py.string_dtype(), maxshape=[None], chunks=True, compression="gzip", compression_opts=compression_level)
+        kwargs = {}
+        if compression_level > 0:
+          kwargs["compression"] = "gzip"
+          kwargs["compression_opts"] = compression_level
+          print(f"Using compression level {compression_level}")
+
+        utils.add_data_to_hdf(hdf, "coordinates",   coord_buffer,       dtype=np.float32, maxshape=[None, 3], chunks=(32,3), **kwargs)
+        utils.add_data_to_hdf(hdf, "elements",      elems_buffer,       dtype=np.int32,   maxshape=[None],    chunks=True,   **kwargs)
+        utils.add_data_to_hdf(hdf, "atom_number",   nr_atoms_buffer,    dtype=np.int32,   maxshape=[None],    chunks=True,   **kwargs)
+        utils.add_data_to_hdf(hdf, "label",         label_buffer,       dtype=np.int32,   maxshape=[None],    chunks=True,   **kwargs)
+        utils.add_data_to_hdf(hdf, "coord_starts",  start_idxs_buffer,  dtype=np.uint64,  maxshape=[None],    chunks=True,   **kwargs)
+        utils.add_data_to_hdf(hdf, "coord_ends",    end_idxs_buffer,    dtype=np.uint64,  maxshape=[None],    chunks=True,   **kwargs)
+        utils.add_data_to_hdf(hdf, "topology_key",  key_buffer,         dtype=h5py.string_dtype(), maxshape=[None], chunks=True, **kwargs)
         if "entry_number" not in hdf.keys(): 
           print("creating the dataset")
           hdf.create_dataset('entry_number', data= np.array([len(label_buffer)], dtype=np.int32), dtype=np.int32, maxshape = [1])
@@ -170,16 +180,22 @@ def generate_surf_miniset(sourcefile, outputfile, indicefile, label_nr, force=Fa
       xyzr_st_buffer = xyzr_ed_buffer - n_xyzr
 
       with feater.io.hdffile(outputfile, "a") as f:
-        utils.add_data_to_hdf(f, "xyzr", xyzr_buffer, dtype=np.float32, maxshape=[None, 4], compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(f, "vertices", vertex_buffer, dtype=np.float32, maxshape=[None, 3], compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(f, "faces", face_buffer, dtype=np.int32, maxshape=[None, 3], compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(f, "label", label_buffer, dtype=np.int32, maxshape=[None], compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(f, "xyzr_starts", xyzr_st_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(f, "xyzr_ends", xyzr_ed_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(f, "vert_starts", vert_st_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(f, "vert_ends", vert_ed_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(f, "face_starts", face_st_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(f, "face_ends", face_ed_buffer, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=compression_level)
+        kwargs = {}
+        if compression_level > 0:
+          kwargs["compression"] = "gzip"
+          kwargs["compression_opts"] = compression_level
+          print(f"Using compression level {compression_level}")
+
+        utils.add_data_to_hdf(f, "xyzr",        xyzr_buffer,    dtype=np.float32, maxshape=[None, 4], chunks=(1000, 4), **kwargs)
+        utils.add_data_to_hdf(f, "vertices",    vertex_buffer,  dtype=np.float32, maxshape=[None, 3], chunks=(1000, 3), **kwargs)
+        utils.add_data_to_hdf(f, "faces",       face_buffer,    dtype=np.int32,   maxshape=[None, 3], chunks=(1000, 3), **kwargs)
+        utils.add_data_to_hdf(f, "label",       label_buffer,   dtype=np.int32,   maxshape=[None],    chunks=True, **kwargs)
+        utils.add_data_to_hdf(f, "xyzr_starts", xyzr_st_buffer, dtype=np.uint64,  maxshape=[None],    chunks=True, **kwargs)
+        utils.add_data_to_hdf(f, "xyzr_ends",   xyzr_ed_buffer, dtype=np.uint64,  maxshape=[None],    chunks=True, **kwargs)
+        utils.add_data_to_hdf(f, "vert_starts", vert_st_buffer, dtype=np.uint64,  maxshape=[None],    chunks=True, **kwargs)
+        utils.add_data_to_hdf(f, "vert_ends",   vert_ed_buffer, dtype=np.uint64,  maxshape=[None],    chunks=True, **kwargs)
+        utils.add_data_to_hdf(f, "face_starts", face_st_buffer, dtype=np.uint64,  maxshape=[None],    chunks=True, **kwargs)
+        utils.add_data_to_hdf(f, "face_ends",   face_ed_buffer, dtype=np.uint64,  maxshape=[None],    chunks=True, **kwargs)
   print(f"Finished processing the dataset; Time elapsed: {time.perf_counter()-st:.2f} seconds")
 
 def generate_vox_miniset(sourcefile, outputfile, indicefile, label_nr, force=False, compression_level=4): 
@@ -221,8 +237,13 @@ def generate_vox_miniset(sourcefile, outputfile, indicefile, label_nr, force=Fal
         label_buffer = np.array([hdf["label"][i] for i in batch], dtype=np.int32)
 
       with feater.io.hdffile(outputfile, "a") as hdf:
-        utils.add_data_to_hdf(hdf, "voxel", voxel_buffer, dtype=np.float32, chunks=True, maxshape=(None, 32, 32, 32), compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(hdf, "label", label_buffer, dtype=np.int32, chunks=True, maxshape=[None], compression="gzip", compression_opts=compression_level)
+        kwargs = {}
+        if compression_level > 0:
+          kwargs["compression"] = "gzip"
+          kwargs["compression_opts"] = compression_level
+          print(f"Using compression level {compression_level}")
+        utils.add_data_to_hdf(hdf, "voxel", voxel_buffer, dtype=np.float32, chunks=(1, 32, 32, 32), maxshape=(None, 32, 32, 32), **kwargs)
+        utils.add_data_to_hdf(hdf, "label", label_buffer, dtype=np.int32, chunks=True, maxshape=[None], **kwargs)
   print(f"Finished processing the dataset; Time elapsed: {time.perf_counter()-st:.2f} seconds")
 
 def generate_hilbert_miniset(sourcefile, outputfile, indicefile, label_nr, force=False, compression_level=4): 
@@ -257,17 +278,23 @@ def generate_hilbert_miniset(sourcefile, outputfile, indicefile, label_nr, force
       with feater.io.hdffile(sourcefile, "r") as hdf:
         label_buffer = np.array([hdf["label"][i] for i in batch], dtype=np.int32)
 
-      with feater.io.hdffile(outputfile, "a") as hdf:
-        utils.add_data_to_hdf(hdf, "voxel", voxel_buffer, dtype=np.float32, chunks=True, maxshape=(None, 128, 128), compression="gzip", compression_opts=compression_level)
-        utils.add_data_to_hdf(hdf, "label", label_buffer, dtype=np.int32, chunks=True, maxshape=[None], compression="gzip", compression_opts=compression_level)
+      with feater.io.hdffile(outputfile, "a") as hdf: 
+        kwargs = {}
+        if compression_level > 0:
+          kwargs["compression"] = "gzip"
+          kwargs["compression_opts"] = compression_level
+          print(f"Using compression level {compression_level}")
+        utils.add_data_to_hdf(hdf, "voxel", voxel_buffer, dtype=np.float32, chunks=(1, 128, 128), maxshape=(None, 128, 128), **kwargs)
+        utils.add_data_to_hdf(hdf, "label", label_buffer, dtype=np.int32,   chunks=True,          maxshape=[None],           **kwargs)
   print(f"Finished processing the dataset; Time elapsed: {time.perf_counter()-st:.2f} seconds")
 
 if "__main__" == __name__: 
   label_nr = 400
   target_nr = 1000
-  outputdir = "/Matter/feater_testset_1000/"
+  outputdir = "/Matter/feater_train_1000/"
   compression_level = 0
-  whichset = "test"
+  whichset = "train"     # NOTE: "train" or "test"; If other files are needed, please modify the code accordingly 
+  index_regeneration = False
 
   #############################################################################
   ################# Finished the definition of needed parms ###################
@@ -307,10 +334,10 @@ if "__main__" == __name__:
   elif whichset == "test":
     print(f"Using the TEST dataset ")
     DualSourceFiles = [
-    "/Weiss/FEater_Dual_PDBHDF/TestSet_Dataset.h5",
-    "/Weiss/FEater_Dual_SURF/TestSet_Surface.h5",
-    "/Weiss/FEater_Dual_VOX/TestSet_Voxel.h5",
-    "/Weiss/FEater_Dual_HILB/TestSet_Hilbert.h5",
+      "/Weiss/FEater_Dual_PDBHDF/TestSet_Dataset.h5",
+      "/Weiss/FEater_Dual_SURF/TestSet_Surface.h5",
+      "/Weiss/FEater_Dual_VOX/TestSet_Voxel.h5",
+      "/Weiss/FEater_Dual_HILB/TestSet_Hilbert.h5",
     ]
     
     SingleSourceFiles = [
@@ -327,11 +354,18 @@ if "__main__" == __name__:
   elif label_nr == 20:
     SourceFiles = SingleSourceFiles
 
-  # Firstly make the indices
-  seed = label_nr
-  np.random.seed(seed)
-  make_indices(SourceFiles[0], indicefile, label_nr, target_nr)
-
+  
+  if index_regeneration or (not os.path.exists(indicefile)):
+    # Firstly make the indices
+    seed = label_nr
+    np.random.seed(seed)
+    make_indices(SourceFiles[0], indicefile, label_nr, target_nr)
+    print(f"Indices file {indicefile} has been created")
+  else:
+    if os.path.exists(indicefile):
+      print(f"Using the existing indices file {indicefile}")
+    else:
+      raise FileNotFoundError(f"Indices file {indicefile} does not exist")
 
   generate_coord_miniset(SourceFiles[0], OutputFiles[0], indicefile, label_nr, force=True, compression_level=compression_level)
   with open(os.path.join(outputdir, f"{mark}_coord.txt"), "w") as f: 
@@ -349,57 +383,3 @@ if "__main__" == __name__:
   with open(os.path.join(outputdir, f"{mark}_hilbert.txt"), "w") as f: 
     f.write(os.path.abspath(OutputFiles[3]) + "\n")
 
-
-
-  #############################################################################
-  # Conclusion: 
-  # Save 20% space but cause x4.7 increase in loading time for voxel representation
-  # x3.2 increase in loading time for hilbert curve representation 
-  #############################################################################
-  # 50 samples per class with compression level 4
-  # total 4.7G
-  # -rw-r--r-- 1 yzhang users 254K Apr 16 14:20 indices_400.json
-  # -rw-r--r-- 1 yzhang users  14M Apr 16 14:20 testpdb.h5
-  # -rw-r--r-- 1 yzhang users 1.2G Apr 16 14:21 testsurf.h5
-  # -rw-r--r-- 1 yzhang users 2.4G Apr 16 14:22 testvox.h5
-  # -rw-r--r-- 1 yzhang users 1.2G Apr 16 14:22 testhilbert.h5
-  #############################################################################
-  # 50 samples per class without compression
-  # total 5.9G
-  # -rw-r--r-- 1 yzhang users 254K Apr 16 14:46 indices_400.json
-  # -rw-r--r-- 1 yzhang users  18M Apr 16 14:46 testpdb.h5
-  # -rw-r--r-- 1 yzhang users 2.2G Apr 16 14:46 testsurf.h5
-  # -rw-r--r-- 1 yzhang users 2.5G Apr 16 14:46 testvox.h5
-  # -rw-r--r-- 1 yzhang users 1.3G Apr 16 14:47 testhilbert.h5
-  #############################################################################
-  # No compression / 50 samples per class
-  # Iteration of CoordDataset data: 1.76 seconds
-  # SurfDataset: Average vertices per entry:  3098.46
-  # Iteration of SurfDataset data: 59.16 seconds
-  # Iteration of VoxelDataset data: 6.85 seconds
-  # Iteration of HilbertCurveDataset data: 3.29 seconds
-  #############################################################################
-  # compression level 4 / 50 samples per class
-  # Iteration of CoordDataset data: 1.89 seconds
-  # Iteration of SurfDataset data: 59.89 seconds
-  # Iteration of VoxelDataset data: 32.99 seconds
-  # Iteration of HilbertCurveDataset data: 10.42 seconds
-  #############################################################################
-  # No compression / 200 samples per class 
-  # Iteration of CoordDataset data: 7.07 seconds
-  # Iteration of SurfDataset data: 234.27 seconds
-  # Iteration of VoxelDataset data: 38.01 seconds
-  # Iteration of HilbertCurveDataset data: 21.70 seconds
-  #############################################################################
-  # Iteration of CoordDataset data: 14.23 seconds
-  # SurfDataset: Average vertices per entry:  3098.90
-  # Iteration of SurfDataset data: 469.12 seconds
-  # Iteration of VoxelDataset data: 123.14 seconds
-  # Iteration of HilbertCurveDataset data: 67.88 seconds
-  #############################################################################
-  # No compression / 800 samples per class 
-  # Iteration of CoordDataset data: 28.61 seconds
-  # Iteration of SurfDataset data: 934.48 seconds
-  # Iteration of VoxelDataset data: 439.55 seconds
-  # Iteration of HilbertCurveDataset data: 137.56 seconds
-  #############################################################################

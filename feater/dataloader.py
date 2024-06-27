@@ -65,6 +65,7 @@ class BaseDataset(data.Dataset):
     # Initialize the hdffiles and general information
     self.hdffiles = []
     self.total_entries = 0
+    self.do_padding = False
     # Prepare the map size for the dataset
     for file in hdffiles:
       self.hdffiles.append(file)
@@ -109,6 +110,9 @@ class BaseDataset(data.Dataset):
 
   # @profile
   def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, v=0, **kwargs):
+    """
+    Base class for the mini-batch iteration. 
+    """
     pool = mp.Pool(process_nr)
     indices = np.arange(self.total_entries)
     if shuffle:
@@ -116,26 +120,37 @@ class BaseDataset(data.Dataset):
     st = time.perf_counter()
     batches = split_array(indices, batch_size)
     for batch_idx, batch in enumerate(batches): 
-      # print(kwargs, batch_idx, batch_idx < kwargs.get("end_batch"))
       if batch_idx < kwargs.get("start_batch", 0): 
         continue
       elif batch_idx > kwargs.get("end_batch", len(batches)):
         break
       tasks = [self.mini_batch_task(i) for i in batch]
       ret_data = pool.starmap(readdata, tasks)
+
       if v: 
-        print(f"HERE processing {batch_idx} batch of {len(batches)} batches, time: {time.perf_counter() - st:8.2f}")
+        print(f"Processing {batch_idx} batch of {len(batches)} batches, time: {time.perf_counter() - st:8.2f}")
         st = time.perf_counter()
-      _shape = [i.shape for i in ret_data]
-      _shape = tuple(np.max(_shape, axis=0))
-      data_numpy = np.zeros((len(ret_data), *_shape), dtype=np.float32)
-      for i, ret in enumerate(ret_data):
-        if ret.shape != _shape:
-          # Do padding if the shape is heterogeneous
-          theslice = np.s_[tuple(slice(0, i) for i in ret.shape)]
-          data_numpy[i][theslice] = ret
-        else:
-          data_numpy[i, ...] = ret 
+      
+      if self.do_padding:
+        # Padding the data for heterogeneous shape (coordinates, surface vertices)
+        data_numpy  = np.zeros((len(ret_data), self.target_np, 3), dtype=np.float32)
+        for i, ret in enumerate(ret_data):
+          ret = ret[np.sum(ret, axis=1) != 0]   # Mask the 0,0,0 points
+          ret -= np.min(ret, axis=0)            # Move to the origin
+          ret_pointnr = ret.shape[0]
+          # Shuffle the order of points (n_samples, n_points, 3)
+          if ret_pointnr < self.target_np:
+            # Point number less than target number, shuffle the source points
+            shuffuled = np.random.choice(self.target_np, ret_pointnr, replace=False)
+            data_numpy[i, shuffuled, :] = ret
+          else:
+            # Point number more than target number, randomly select target_np points
+            shuffuled = np.random.choice(ret_pointnr, self.target_np, replace=False)
+            data_numpy[i, ...] = np.array(ret[shuffuled, :], dtype=np.float32)
+      else: 
+        # Homogeneous shape 
+        data_numpy = np.array(ret_data, dtype=np.float32)
+        assert data_numpy.shape == (len(ret_data), 1, *self.shape), f"Shape mismatch: {data_numpy.shape} vs {len(ret_data), *self.shape}"
 
       tasks = [(self.get_file(i), self.get_position(i)) for i in batch]
       labels = pool.starmap(readlabel, tasks)
@@ -202,28 +217,28 @@ class CoordDataset(BaseDataset):
   
   def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, **kwargs):
     for data, label in super().mini_batches(batch_size=batch_size, shuffle=shuffle, process_nr=process_nr, **kwargs): 
-      data = self.padding_batch(data)
+      # data = self.padding_batch(data)
       yield data, label
   
-  def padding_batch(self, batch):
-    ret_points = np.zeros((batch.shape[0], self.target_np, batch.shape[2]), dtype=np.float32)
-    batch = batch.numpy()
-    randomization = np.arange(self.target_np)
-    np.random.shuffle(randomization)
+  # def padding_batch(self, batch):
+  #   ret_points = np.zeros((batch.shape[0], self.target_np, batch.shape[2]), dtype=np.float32)
+  #   batch = batch.numpy()
+  #   randomization = np.arange(self.target_np)
+  #   np.random.shuffle(randomization)
 
-    for idx, entry in enumerate(batch):
-      point_nr = np.count_nonzero(np.count_nonzero(entry, axis=1))
-      batch[idx, :point_nr, :] -= np.min(entry[:point_nr, :], axis=0)
-      _randomization = np.arange(min(self.target_np, point_nr))
-      np.random.shuffle(_randomization)
-      if point_nr <= self.target_np:
-        # Choose random points to fill with the result points
-        ret_points[idx, randomization[:point_nr], :] = batch[idx, _randomization, :]
-      elif point_nr > self.target_np:
-        # Randomly select target_np points
-        ret_points[idx, randomization, :] = batch[idx, _randomization[:self.target_np], :]
-    ret_points = torch.from_numpy(ret_points)
-    return ret_points
+  #   for idx, entry in enumerate(batch):
+  #     point_nr = np.count_nonzero(np.count_nonzero(entry, axis=1))
+  #     batch[idx, :point_nr, :] -= np.min(entry[:point_nr, :], axis=0)
+  #     _randomization = np.arange(min(self.target_np, point_nr))
+  #     np.random.shuffle(_randomization)
+  #     if point_nr <= self.target_np:
+  #       # Choose random points to fill with the result points
+  #       ret_points[idx, randomization[:point_nr], :] = batch[idx, _randomization, :]
+  #     elif point_nr > self.target_np:
+  #       # Randomly select target_np points
+  #       ret_points[idx, randomization, :] = batch[idx, _randomization[:self.target_np], :]
+  #   ret_points = torch.from_numpy(ret_points)
+  #   return ret_points
     
   def padding(self, points):
     # Prerequisite: the points are not yet padded to a fixed length
@@ -248,7 +263,7 @@ class VoxelDataset(BaseDataset):
     global_ind = 0
     for fidx, file in enumerate(self.hdffiles):
       with io.hdffile(file, "r") as h5file:
-        self.shape = np.array(h5file["dimensions"], dtype=np.uint32)
+        self.shape = h5file["dimensions"][:].astype(np.int32)
         entry_nr_i = h5file["label"].shape[0]
       self.position_map[global_ind:global_ind+entry_nr_i] = np.arange(entry_nr_i)
       self.file_map[global_ind: global_ind + entry_nr_i] = fidx
@@ -271,7 +286,6 @@ class VoxelDataset(BaseDataset):
   
   def mini_batch_task(self, index):
     return (self.get_file(index), "voxel", np.s_[self.get_start(index):self.get_end(index)])
-    # return (self.get_file(index), "voxel", np.s_[index])
 
   def __len__(self):
     return self.total_entries
@@ -320,9 +334,9 @@ class SurfDataset(BaseDataset):
   def get_label(self, index):
     return readlabel(self.get_file(index), self.get_position(index))
 
-  def mini_batches(self, batch_size=512, shuffle=True, process_nr=24):
-    for data, label in super().mini_batches(batch_size=batch_size, shuffle=shuffle, process_nr=process_nr):
-      data = self.padding_batch(data)
+  def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, **kwargs):
+    for data, label in super().mini_batches(batch_size=batch_size, shuffle=shuffle, process_nr=process_nr, **kwargs):
+      # data = self.padding_batch(data)
       yield data, label
 
   def mini_batch_task(self, index):
@@ -331,44 +345,47 @@ class SurfDataset(BaseDataset):
     """
     start_idx = self.get_start(index)
     end_idx = self.get_end(index)
-    if (end_idx - start_idx > self.target_np) and self.do_padding:
-      # Randomly select target_np points
-      _rand = np.arange(start_idx, end_idx, dtype=np.uint64)
-      np.random.shuffle(_rand)
-      nr_query = int(min(self.target_np*1.05, end_idx - start_idx))
-      _rand = _rand[:nr_query]  # NOTE: Increase a bit because the source vertices might have zero points
-      _rand.sort()
-      theslice = np.s_[_rand]
-    else: 
-      # No padding for visualization
-      theslice = np.s_[start_idx:end_idx]
+    theslice = np.s_[start_idx:end_idx]
     return (self.get_file(index), "vertices", theslice)
+  
+    # Now query all of them for mini-batch level padding
+    # if (end_idx - start_idx > self.target_np) and self.do_padding:
+    #   # Randomly select target_np points
+    #   _rand = np.arange(start_idx, end_idx, dtype=np.uint64)
+    #   np.random.shuffle(_rand)
+    #   nr_query = int(min(self.target_np*1.05, end_idx - start_idx))
+    #   _rand = _rand[:nr_query]  # NOTE: Increase a bit because the source vertices might have zero points
+    #   _rand.sort()
+    #   theslice = np.s_[_rand]
+    # else: 
+    #   # No padding for visualization
+    #   theslice = np.s_[start_idx:end_idx]
+    
 
-  def padding_batch(self, batch):
-    """
-    Perform point padding for a batch of surface vertices
+  # def padding_batch(self, batch):
+  #   """
+  #   Perform point padding for a batch of surface vertices
 
-    Parameters
-    ----------
-    batch : torch.Tensor
-      The input batch of surface vertices
+  #   Parameters
+  #   ----------
+  #   batch : torch.Tensor
+  #     The input batch of surface vertices
       
-    """
-    ret_points = np.zeros((batch.shape[0], self.target_np, batch.shape[2]), dtype=np.float32)
-    batch = batch.numpy()
-    ret_point_rand = np.arange(self.target_np)
-    np.random.shuffle(ret_point_rand)
-    for idx, entry in enumerate(batch):
-      # Mask the points at origin point, move to the origin and then do the padding
-      mask = np.count_nonzero(entry, axis=1).astype(bool)
-      entry = entry[mask]
-      lower_boundi = np.min(entry, axis=0)
-      entry -= lower_boundi
-      np.random.shuffle(entry)
-      ret_points[idx][ret_point_rand[:min(self.target_np, entry.shape[0])], :] = entry[:min(self.target_np, entry.shape[0]), :]
-    ret_points = torch.from_numpy(ret_points)
-    # print(">>>> ", ret_points.shape, " size ", ret_points.nbytes/1024/1024/1024, " GB")
-    return ret_points
+  #   """
+  #   ret_points = np.zeros((batch.shape[0], self.target_np, batch.shape[2]), dtype=np.float32)
+  #   batch = batch.numpy()
+  #   ret_point_rand = np.arange(self.target_np)
+  #   np.random.shuffle(ret_point_rand)
+  #   for idx, entry in enumerate(batch):
+  #     # Mask the points at origin point, move to the origin and then do the padding
+  #     mask = np.count_nonzero(entry, axis=1).astype(bool)
+  #     entry = entry[mask]
+  #     lower_boundi = np.min(entry, axis=0)
+  #     entry -= lower_boundi
+  #     np.random.shuffle(entry)
+  #     ret_points[idx][ret_point_rand[:min(self.target_np, entry.shape[0])], :] = entry[:min(self.target_np, entry.shape[0]), :]
+  #   ret_points = torch.from_numpy(ret_points)
+  #   return ret_points
 
   def padding(self, points):
     """
@@ -457,6 +474,7 @@ class HilbertCurveDataset(BaseDataset):
     global_ind = 0
     for fidx, file in enumerate(self.hdffiles):
       with io.hdffile(file, "r") as h5file:
+        self.shape = h5file["size"][:].astype(np.int32)
         entry_nr_i = h5file["label"].shape[0]
         self.file_map[global_ind:global_ind + entry_nr_i] = fidx
         self.position_map[global_ind:global_ind + entry_nr_i] = np.arange(entry_nr_i)

@@ -38,8 +38,7 @@ def make_hdf(inputhdf:str, outputhdf:str, interp_settings:dict):
   with io.hdffile(inputhdf, "r") as f:
     entry_nr = f["label"].shape[0]
     print(f"Processing {entry_nr} entries from {inputhdf} to {outputhdf}")
-
-  # entry_nr = 5000             # TODO: Remove this for production
+  
   NR_PROCESS = int(interp_settings.get("processes", 8))
   BATCH_SIZE = 1000
   BIN_NR = (entry_nr + BATCH_SIZE - 1) // BATCH_SIZE

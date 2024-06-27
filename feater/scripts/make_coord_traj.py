@@ -1,5 +1,7 @@
+"""
+Convert a list of PDB fragments to a single trajectory file 
+"""
 import os, sys, argparse, time
-
 import pytraj as pt
 import numpy as np
 
@@ -37,7 +39,7 @@ def make_netCDF(nc_name:str, coord_files:list, **kwargs):
 def parse_args():
   parser = argparse.ArgumentParser(description="Convert coordinate files to HDF5 format")
   parser.add_argument("-i", "--input", type=str, help="The input file containing a list of coordinate files")
-  parser.add_argument("-o", "--output", type=str, help="The output HDF5 file")
+  parser.add_argument("-o", "--output", type=str, help="The output trajectory file")
   parser.add_argument("-f", "--force", type=int, default=0, help="Force overwrite the output file")
   args = parser.parse_args()
 

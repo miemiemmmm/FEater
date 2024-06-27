@@ -1,9 +1,9 @@
-import os, argparse, sys, time
+import os, argparse, time
 
 import numpy as np
 import multiprocessing as mp
-from pytraj import load as ptload
-from feater import RES2LAB, io, utils, constants
+from feater import io, utils
+
 import siesta
 
 
@@ -183,6 +183,7 @@ def console_interface():
 
 if __name__ == "__main__":
   console_interface()
+  
   # filelists = "/media/yzhang/MieT72/Data/feater_database/ValidationSet_ALA.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_ARG.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_ASN.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_ASP.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_CYS.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_GLN.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_GLU.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_GLY.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_HIS.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_ILE.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_LEU.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_LYS.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_MET.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_PHE.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_PRO.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_SER.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_THR.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_TRP.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_TYR.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_VAL.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ALA.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ARG.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ASN.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ASP.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_CYS.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_GLN.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_GLU.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_GLY.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_HIS.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ILE.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_LEU.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_LYS.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_MET.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_PHE.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_PRO.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_SER.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_THR.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_TRP.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_TYR.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_VAL.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ALA.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ARG.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ASN.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ASP.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_CYS.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_GLN.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_GLU.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_GLY.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_HIS.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ILE.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_LEU.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_LYS.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_MET.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_PHE.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_PRO.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_SER.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_THR.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_TRP.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_TYR.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_VAL.txt"
   # listfiles = filelists.strip("%").split("%")
   # print(f"Processing {len(listfiles)} list files")

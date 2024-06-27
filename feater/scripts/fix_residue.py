@@ -1,3 +1,40 @@
+"""
+User CAMPARI to fix the missing atoms in the residue.
+
+Example: 
+  from feater.scripts import fix_residue
+  
+  def to_pdb_single(resname, top, crd):
+    with tempfile.TemporaryDirectory() as tempdir:
+      tempf_pdb = os.path.join(tempdir, "tmp.pdb")
+      tempf_key = os.path.join(tempdir, "tmp.key")
+      tempf_seq = os.path.join(tempdir, "tmp.seq")
+      tmp_traj = pt.Trajectory(top=top, xyz=np.array([crd]))
+      tmp_traj.save(tempf_pdb, overwrite=True, options='chainid 1')
+      r1name = get_seq_name(resname)
+      with open(tempf_seq, "w") as tempf:
+        tempf.write(f"{r1name}_N_C\n")
+        tempf.write("END\n")
+      output_pdb = fix_residue.fix_residue(tempdir, seq_file=tempf_seq, pdb_file=tempf_pdb, key_file=tempf_key)
+    return output_pdb.get("result_pdb", "")
+
+  def to_pdb_dual(r1name, r2name, top, crd):
+    with tempfile.TemporaryDirectory() as tempdir:
+      tempf_pdb = os.path.join(tempdir, "tmp.pdb")
+      tempf_key = os.path.join(tempdir, "tmp.key")
+      tempf_seq = os.path.join(tempdir, "tmp.seq")
+      tmp_traj = pt.Trajectory(top=top, xyz=np.array([crd]))
+      tmp_traj.save(tempf_pdb, overwrite=True, options='chainid 1')
+      r1name = get_seq_name(r1name)
+      r2name = get_seq_name(r2name)
+      with open(tempf_seq, "w") as tempf:
+        tempf.write(f"{r1name}_N\n")
+        tempf.write(f"{r2name}_C\n")
+        tempf.write("END\n")
+      output_pdb = fix_residue.fix_residue(tempdir, seq_file=tempf_seq, pdb_file=tempf_pdb, key_file=tempf_key)
+      return output_pdb.get("result_pdb", "")
+"""
+
 import os, sys, copy, argparse, tempfile
 import subprocess
 

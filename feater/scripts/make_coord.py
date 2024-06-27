@@ -64,10 +64,12 @@ def make_hdf(hdf_name:str, coord_files:list, kwargs):
     if idx > 0: 
       # User only defines the first writing of the HDF file
       write_flag = "a"
+    
     with io.hdffile(hdf_name, write_flag) as f:
-      if key_buffer[0] not in f.keys():
-        print(f"Dumping the topology file: {kwargs['topology']} to the HDF file")
-        f.dump_top(kwargs["topology"], key_buffer[0])
+      for kidx, key in enumerate(key_buffer):
+        if key not in f.keys():
+          print(f"Dumping the topology file of {key}: {batch[kidx]} to the HDF file")
+          f.dump_top(batch[kidx], key)
       utils.add_data_to_hdf(f, "coordinates", coord_buffer, dtype=np.float32, maxshape=[None, 3], chunks=True, compression="gzip", compression_opts=4)
       utils.add_data_to_hdf(f, "elements", elems_buffer, dtype=np.int32, maxshape=[None], chunks=True, compression="gzip", compression_opts=4)
       utils.add_data_to_hdf(f, "atom_number", nr_atoms_buffer, dtype=np.int32, maxshape=[None], chunks=True, compression="gzip", compression_opts=4)

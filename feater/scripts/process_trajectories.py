@@ -1,3 +1,10 @@
+"""
+Process the trajectory file 
+
+Example: 
+
+"""
+
 import os, sys, tempfile, hashlib, time, argparse, json
 import numpy as np
 import pytraj as pt 
@@ -59,21 +66,73 @@ def get_lab_name(inputname):
   return outname
 
 
-
-def coord_from_traj(trajfile:str, topfile:str, settings:dict): 
-  stride = settings.get("stride", 10)
-  if len(topfile) == 0: 
+def loadtraj(trajsettings:dict): 
+  trajfile = trajsettings.get("traj", "")
+  topfile = trajsettings.get("top", "")
+  stride = trajsettings.get("stride", 1)
+  if len(topfile) == 0 and trajsettings["mode"] == "normal": 
     traj = pt.load(trajfile, stride=stride)
+  elif trajsettings["mode"] == "misato":
+    import h5py
+    pdbcode = os.path.abspath(topfile).split("/")[-2].lower()
+    if len(pdbcode) != 4:
+      raise ValueError(f"Topology file {topfile} is not a valid topology file.")
+    top = pt.load_topology(topfile)
+    res = set([i.name for i in top.residues])
+    if "WAT" in res:
+      top.strip(":WAT")
+    if "Cl-" in res:
+      top.strip(":Cl-")
+    if "Na+" in res:
+      top.strip(":Na+")
+
+    with h5py.File(trajfile, "r") as hdf:
+      coord = hdf[f"/{pdbcode.upper()}/trajectory_coordinates"]
+      slice_frame = np.s_[::stride]
+      slice_atom = np.s_[:]
+      traj = pt.Trajectory(xyz=coord[slice_frame, slice_atom, :], top=top)
   else:
     traj = pt.load(trajfile, top=topfile, stride=stride)
+  print(traj)
+  return traj
+
+
+def coord_from_traj(trajfile:str, topfile:str, settings:dict): 
+  """
+
+  # stride = settings.get("stride", 10)
+  # if len(topfile) == 0: 
+  #   traj = pt.load(trajfile, stride=stride)
+  # else:
+  #   traj = pt.load(trajfile, top=topfile, stride=stride)  
+  
+  """
+  # Load the trajectory file 
+  if settings["trajtype"] == "normal":
+    traj_settings = {
+      "traj": trajfile,
+      "top": topfile,
+      "stride": settings.get("stride", 10), 
+      "mode": "normal", 
+    }
+  elif settings["trajtype"] == "misato":
+    traj_settings = {
+      "traj": trajfile,    # the HDF file for the trajectory
+      "top": topfile,      # the corresponding topology file tar.gz
+      "stride": settings.get("stride", 10), 
+      "mode": "misato", 
+    }
+  traj = loadtraj(traj_settings)
   residues = [i for i in traj.top.residues]
   print(f"There are {traj.n_frames} frames and {len(residues)} residues in the trajectory.")
-  pool = mp.Pool(32)
 
+  # Initialize the pool for multiprocessing
+  compress_level = settings.get("compress", 4)
+  pool = mp.Pool(32)
   MODE = settings.get("mode", "dual")
   OUTPUT_NCFILE = settings.get("output", "output.h5")
   RES_CANDIDATES = constants.RES + ["HID", "HIE", "HIP", "CYX"]
-  PB_THRESHOLD = 1.32*1.25
+  PB_THRESHOLD = 1.32 * 1.25   
   for res_idx, res1 in enumerate(residues[:-1]):
     st = time.perf_counter()
     print(f"Processing the {res_idx+1:4d}/{len(residues):4d} residue")
@@ -161,19 +220,18 @@ def coord_from_traj(trajfile:str, topfile:str, settings:dict):
     start_idxs_buffer = end_idxs_buffer - np.array(nr_atoms_buffer, dtype=np.uint64)
       
     with io.hdffile(OUTPUT_NCFILE, "a") as f:
-      utils.add_data_to_hdf(f, "coordinates", coord_buffer, dtype=np.float32, maxshape=[None, 3], chunks=True, compression="gzip", compression_opts=4)
-      utils.add_data_to_hdf(f, "elements", elems_buffer, dtype=np.int32, maxshape=[None], chunks=True, compression="gzip", compression_opts=4)
-      utils.add_data_to_hdf(f, "atom_number", nr_atoms_buffer, dtype=np.int32, maxshape=[None], chunks=True, compression="gzip", compression_opts=4)
-      utils.add_data_to_hdf(f, "label", label_buffer, dtype=np.int32, maxshape=[None], chunks=True, compression="gzip", compression_opts=4)
-      utils.add_data_to_hdf(f, "coord_starts", start_idxs_buffer, dtype=np.uint64, maxshape=[None], chunks=True, compression="gzip", compression_opts=4)
-      utils.add_data_to_hdf(f, "coord_ends", end_idxs_buffer, dtype=np.uint64, maxshape=[None], chunks=True, compression="gzip", compression_opts=4)
-      utils.add_data_to_hdf(f, "topology_key", key_buffer, dtype=h5py.string_dtype(), maxshape=[None], chunks=True, compression="gzip", compression_opts=4)
+      utils.add_data_to_hdf(f, "coordinates", coord_buffer, dtype=np.float32, maxshape=[None, 3], chunks=True, compression="gzip", compression_opts=compress_level)
+      utils.add_data_to_hdf(f, "elements", elems_buffer, dtype=np.int32, maxshape=[None], chunks=True, compression="gzip", compression_opts=compress_level)
+      utils.add_data_to_hdf(f, "atom_number", nr_atoms_buffer, dtype=np.int32, maxshape=[None], chunks=True, compression="gzip", compression_opts=compress_level)
+      utils.add_data_to_hdf(f, "label", label_buffer, dtype=np.int32, maxshape=[None], chunks=True, compression="gzip", compression_opts=compress_level)
+      utils.add_data_to_hdf(f, "coord_starts", start_idxs_buffer, dtype=np.uint64, maxshape=[None], chunks=True, compression="gzip", compression_opts=compress_level)
+      utils.add_data_to_hdf(f, "coord_ends", end_idxs_buffer, dtype=np.uint64, maxshape=[None], chunks=True, compression="gzip", compression_opts=compress_level)
+      utils.add_data_to_hdf(f, "topology_key", key_buffer, dtype=h5py.string_dtype(), maxshape=[None], chunks=True, compression="gzip", compression_opts=compress_level)
       if "entry_number" not in f.keys(): 
         f.create_dataset('entry_number', data= np.array([len(label_buffer)], dtype=np.int32), dtype=np.int32, maxshape = [1])
       else:
         f["entry_number"][0] += len(label_buffer)
     print(f"The {res_idx+1:4d}/{len(residues):4d} residue took {time.perf_counter()-st:6.2f} seconds to process.")
-    # exit(0)
   print(f"The trajectory file {trajfile} is processed.")    
   print(f"Finished ")
 
@@ -186,7 +244,9 @@ def parser():
   parser.add_argument("-o", "--output", type=str, help="The output HDF file.")
   parser.add_argument("-s", "--stride", type=int, default=1, help="The stride for the trajectory file.")
   parser.add_argument("-m", "--mode", type=str, default="single", help="The mode for processing the trajectory file.")
-  parser.add_argument("--prefix", type=str, default="", help="The prefix for the output HDF file.")
+  parser.add_argument("--trajtype", type=str, default="normal", help="The type of the trajectory file-based (normal), or misato HDF trajs (misato).") 
+  parser.add_argument("--compress-level", type=int, default=4, help="The compression level for the HDF file.")
+  # parser.add_argument("--prefix", type=str, default="", help="The prefix for the output HDF file.")
   args = parser.parse_args()
   return args
 
@@ -199,26 +259,26 @@ def console_interface():
   print(f"Topology file: {top}")
   outsettings = {
     "mode": args.mode,
-    "output": os.path.join(args.output, f"{os.path.basename(traj).split('.')[0]}_{args.mode}_s{args.stride}.h5"),
+    "output": args.output, 
+    # os.path.join(args.output, f"{os.path.basename(traj).split('.')[0]}_{args.mode}_s{args.stride}.h5"),
     "stride": args.stride, 
+    "trajtype": args.trajtype,
+    "compress": args.compress_level,
   }
   print(json.dumps(outsettings, indent=2))
-
   coord_from_traj(traj, top, outsettings)
 
 
+def programming_interface(traj:str, top:str, output:str, stride:int, mode:str, trajtype:str): 
+  outsettings = {
+    "mode": mode,
+    "output": output,
+    "stride": stride, 
+    "trajtype": trajtype,
+    "compress": 0,
+  }
+  coord_from_traj(traj, top, outsettings)
 
 if __name__ == "__main__":
   console_interface()
   
-  # data_folder = "/storage006/yzhang/tests/DESRES-Trajectory_sarscov2-15235455-peptide-B-no-water-no-ion/sarscov2-15235455-peptide-B-no-water-no-ion"
-  # topfile = "s20_out.pdb"
-
-  # setting = {
-  #   "stride": 1,
-  #   "output": "test.h5",
-  # }
-  # coord_from_traj(os.path.join(data_folder, topfile), "", setting)
-  
-  
-
