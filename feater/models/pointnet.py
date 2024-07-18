@@ -1,6 +1,10 @@
-# Code refering to https://github.com/fxia22/pointnet.pytorch
+"""
+Pytorch implementation of PointNet for the paper: https://arxiv.org/abs/1612.00593
 
-# from __future__ import print_function
+Code is adopted from:
+https://github.com/fxia22/pointnet.pytorch/blob/master/pointnet/model.py
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.parallel

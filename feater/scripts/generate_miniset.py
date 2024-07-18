@@ -289,9 +289,9 @@ def generate_hilbert_miniset(sourcefile, outputfile, indicefile, label_nr, force
   print(f"Finished processing the dataset; Time elapsed: {time.perf_counter()-st:.2f} seconds")
 
 if "__main__" == __name__: 
-  label_nr = 400
-  target_nr = 1000
-  outputdir = "/Matter/feater_train_1000/"
+  label_nr = 400               # NOTE: 20 or 400
+  target_nr = 125
+  outputdir = "/Weiss/feater_loader_benchmark_50k"
   compression_level = 0
   whichset = "train"     # NOTE: "train" or "test"; If other files are needed, please modify the code accordingly 
   index_regeneration = False

@@ -217,44 +217,7 @@ class CoordDataset(BaseDataset):
   
   def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, **kwargs):
     for data, label in super().mini_batches(batch_size=batch_size, shuffle=shuffle, process_nr=process_nr, **kwargs): 
-      # data = self.padding_batch(data)
       yield data, label
-  
-  # def padding_batch(self, batch):
-  #   ret_points = np.zeros((batch.shape[0], self.target_np, batch.shape[2]), dtype=np.float32)
-  #   batch = batch.numpy()
-  #   randomization = np.arange(self.target_np)
-  #   np.random.shuffle(randomization)
-
-  #   for idx, entry in enumerate(batch):
-  #     point_nr = np.count_nonzero(np.count_nonzero(entry, axis=1))
-  #     batch[idx, :point_nr, :] -= np.min(entry[:point_nr, :], axis=0)
-  #     _randomization = np.arange(min(self.target_np, point_nr))
-  #     np.random.shuffle(_randomization)
-  #     if point_nr <= self.target_np:
-  #       # Choose random points to fill with the result points
-  #       ret_points[idx, randomization[:point_nr], :] = batch[idx, _randomization, :]
-  #     elif point_nr > self.target_np:
-  #       # Randomly select target_np points
-  #       ret_points[idx, randomization, :] = batch[idx, _randomization[:self.target_np], :]
-  #   ret_points = torch.from_numpy(ret_points)
-  #   return ret_points
-    
-  def padding(self, points):
-    # Prerequisite: the points are not yet padded to a fixed length
-    randomization = np.arange(self.target_np)
-    np.random.shuffle(randomization)
-    point_nr = points.shape[0]
-    _randomization = np.arange(point_nr)
-    ret_data = np.zeros((self.target_np, points.shape[1]), dtype=np.float32)
-    if point_nr <= self.target_np:
-      # Choose random points to fill with the result points
-      ret_data[randomization[:point_nr], :] = points[_randomization, :]
-    elif point_nr > self.target_np:
-      # Randomly select target_np points
-      ret_data[randomization, :] = points[_randomization[:self.target_np], :]
-    return ret_data
-
 
 class VoxelDataset(BaseDataset):
   def __init__(self, hdffiles:list):
@@ -336,7 +299,6 @@ class SurfDataset(BaseDataset):
 
   def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, **kwargs):
     for data, label in super().mini_batches(batch_size=batch_size, shuffle=shuffle, process_nr=process_nr, **kwargs):
-      # data = self.padding_batch(data)
       yield data, label
 
   def mini_batch_task(self, index):
@@ -347,45 +309,6 @@ class SurfDataset(BaseDataset):
     end_idx = self.get_end(index)
     theslice = np.s_[start_idx:end_idx]
     return (self.get_file(index), "vertices", theslice)
-  
-    # Now query all of them for mini-batch level padding
-    # if (end_idx - start_idx > self.target_np) and self.do_padding:
-    #   # Randomly select target_np points
-    #   _rand = np.arange(start_idx, end_idx, dtype=np.uint64)
-    #   np.random.shuffle(_rand)
-    #   nr_query = int(min(self.target_np*1.05, end_idx - start_idx))
-    #   _rand = _rand[:nr_query]  # NOTE: Increase a bit because the source vertices might have zero points
-    #   _rand.sort()
-    #   theslice = np.s_[_rand]
-    # else: 
-    #   # No padding for visualization
-    #   theslice = np.s_[start_idx:end_idx]
-    
-
-  # def padding_batch(self, batch):
-  #   """
-  #   Perform point padding for a batch of surface vertices
-
-  #   Parameters
-  #   ----------
-  #   batch : torch.Tensor
-  #     The input batch of surface vertices
-      
-  #   """
-  #   ret_points = np.zeros((batch.shape[0], self.target_np, batch.shape[2]), dtype=np.float32)
-  #   batch = batch.numpy()
-  #   ret_point_rand = np.arange(self.target_np)
-  #   np.random.shuffle(ret_point_rand)
-  #   for idx, entry in enumerate(batch):
-  #     # Mask the points at origin point, move to the origin and then do the padding
-  #     mask = np.count_nonzero(entry, axis=1).astype(bool)
-  #     entry = entry[mask]
-  #     lower_boundi = np.min(entry, axis=0)
-  #     entry -= lower_boundi
-  #     np.random.shuffle(entry)
-  #     ret_points[idx][ret_point_rand[:min(self.target_np, entry.shape[0])], :] = entry[:min(self.target_np, entry.shape[0]), :]
-  #   ret_points = torch.from_numpy(ret_points)
-  #   return ret_points
 
   def padding(self, points):
     """
@@ -420,28 +343,6 @@ class SurfDataset(BaseDataset):
       choices = np.random.choice(points.shape[0], self.target_np, replace=False)
       points = points[choices]
     return points
-
-  ################### ?????????? ###################
-  # def view_verts(self, index):
-  #   import open3d as o3d
-  #   points, _ = self.__getitem__(index)
-  #   points = points.numpy()
-  #   # Count number of points at 0,0,0
-  #   zero_nr = np.count_nonzero(points, axis=1)
-  #   print(points.shape)
-  #   zero_point_nr = np.count_nonzero(~np.count_nonzero(points, axis=1).astype(bool))
-  #   print(f"Number of points at 0,0,0: {zero_point_nr}")
-  #   pcd = o3d.geometry.PointCloud()
-  #   pcd.points = o3d.utility.Vector3dVector(points)
-  #   o3d.visualization.draw_geometries([pcd])
-
-  # def view_verts2(self, index):
-  #   import open3d as o3d
-  #   points, _ = next(self.mini_batches(batch_size=1, shuffle=True, process_nr=1))
-  #   points = points.numpy()[0]
-  #   pcd = o3d.geometry.PointCloud()
-  #   pcd.points = o3d.utility.Vector3dVector(points)
-  #   o3d.visualization.draw_geometries([pcd])
 
   def get_surf(self, index): 
     """

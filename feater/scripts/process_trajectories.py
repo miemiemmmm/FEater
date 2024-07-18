@@ -128,7 +128,7 @@ def coord_from_traj(trajfile:str, topfile:str, settings:dict):
 
   # Initialize the pool for multiprocessing
   compress_level = settings.get("compress", 4)
-  pool = mp.Pool(32)
+  pool = mp.Pool(8)
   MODE = settings.get("mode", "dual")
   OUTPUT_NCFILE = settings.get("output", "output.h5")
   RES_CANDIDATES = constants.RES + ["HID", "HIE", "HIP", "CYX"]

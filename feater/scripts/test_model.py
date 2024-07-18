@@ -11,6 +11,7 @@ python3 /MieT5/MyRepos/FEater/feater/scripts/train_models.py --model convnext --
 import os, sys, time, io
 import argparse, random, json 
 
+import h5py as h5
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -74,8 +75,6 @@ DATALOADER_TYPES = {
 }
 
 
-
-
 def get_model(model_type:str, output_dim:int): 
   if model_type == "pointnet":
     model = PointNetCls(output_dim)
@@ -83,7 +82,7 @@ def get_model(model_type:str, output_dim:int):
   elif model_type == "pointnet2":
     from feater.models.pointnet2 import get_model as get_pointnet2_model
     if DATALOADER_TYPE == "surface": 
-      rads = [0.35, 0.75]  # For surface-based training
+      rads = [0.5, 1.00]  # For surface-based training
     elif DATALOADER_TYPE == "coord":
       rads = [1.75, 3.60]  # For coordinate-based data
     else: 
@@ -182,13 +181,15 @@ def test_model(model, dataset, criterion, test_number, batch_size, use_cuda=1, p
   correct = 0
   c = 0
   c_samples = 0
+  batch_nr = len(dataset) // batch_size
   with torch.no_grad():
     model.eval()
     for data, target in dataset.mini_batches(batch_size=batch_size, process_nr=process_nr):
       # Correct way to handle the input data
-      # For the PointNet, the data is in the shape of (B, 3, N)
-      # Important: Swap the axis to make the coordinate as 3 input channels of the data
-      # print(target.unique(return_counts=True))
+      # if c % (batch_nr//10) == 0:
+      #   print(f"Testing: {c}/{batch_nr} at {time.ctime()}")
+      #   if (c+1) % 1000 == 0: 
+      #     print(f"Accuracy: {correct/c_samples}; Loss: {test_loss/c}")
 
       if isinstance(dataset, dataloader.CoordDataset) or isinstance(dataset, dataloader.SurfDataset):
         data = data.transpose(2, 1)  
@@ -199,9 +200,8 @@ def test_model(model, dataset, criterion, test_number, batch_size, use_cuda=1, p
 
       if isinstance(model, PointNetCls) or isinstance(pred, tuple):
         pred = pred[0]
-      
-      # Get the logit if the huggingface models is used
-      if isinstance(pred, transformers.file_utils.ModelOutput): 
+      elif isinstance(pred, transformers.file_utils.ModelOutput): 
+        # Get the logit if the huggingface models is used
         pred = pred.logits
       
       pred_choice = torch.argmax(pred, dim=1)
@@ -211,19 +211,18 @@ def test_model(model, dataset, criterion, test_number, batch_size, use_cuda=1, p
       # Increament the counter for test sample count
       c_samples += len(data)
       c += 1
-      if c_samples >= test_number:
-        break
+      # TODO: Check the number of samples to check? 
+      # if c_samples >= test_number:
+      #   break
     test_loss /= c
     accuracy = correct / c_samples
-    
     return test_loss, accuracy
 
 
 def parse_args():
   parser = argparse.ArgumentParser(description="Train the models used in the FEater paper. ")
-
   # Input data files 
-  # parser.add_argument("-train", "--training-data", type=str, required=True, help="The file writes all of the absolute path of h5 files of training data set")
+  parser.add_argument("-train", "--training-data", type=str, default=None, help="The file writes all of the absolute path of h5 files of training data set")
   parser.add_argument("-test",  "--test-data", type=str, required=True, help="The file writes all of the absolute path of h5 files of test data set")
   parser.add_argument("-p",     "--pretrained", type=str, required=True, help="Pretrained model path")
   parser.add_argument("-m",     "--meta-information", type=str, required=True, help="The meta information file for the pretrained model")
@@ -231,7 +230,7 @@ def parse_args():
   parser.add_argument("-w",     "--data-workers", type=int, default=12, help="Number of workers for data loading")
   
   # Miscellanenous
-  parser.add_argument("--test-number", type=int, default=1e8, help="Number of test samples")
+  parser.add_argument("--test-number", type=int, default=100_000_000, help="Number of test samples")
   parser.add_argument("-v", "--verbose", default=0, type=int, help="Verbose printing while training")
   parser.add_argument("-s", "--manualSeed", type=int, help="Manually set seed")
   parser.add_argument("--cuda", type=int, default=int(torch.cuda.is_available()), help="Use CUDA")
@@ -294,8 +293,6 @@ def perform_testing(training_settings: dict):
   if USECUDA:
     classifier.cuda()
 
-  ###################
-  # Get loss function 
   # The loss function in the original training
   criterion = LOSS_FUNCTIONS.get(training_settings["loss_function"], nn.CrossEntropyLoss)()
   print(f"Number of parameters: {sum([p.numel() for p in classifier.parameters()])}")
@@ -308,50 +305,153 @@ def perform_testing(training_settings: dict):
 
   return loss_on_train, accuracy_on_train, loss_on_test, accuracy_on_test
 
+def get_predictions(training_settings): 
+  """
+  Get the predictions from the pretrained model.
+
+  Notes
+  -----
+  The prediction needs: 
+  - **pretrained**(required): The path to the pretrained model
+  - **test_data**(optional): The path to the test data to test the model
+
+  The output will be automatically saved in the output folder with the name of the {pretrained_model_prefix}_result_array.h5 
+  with keys including predicted_train, predicted_test, ground_truth_train, ground_truth_test.
+  """
+  USECUDA = training_settings["cuda"]
+  MODEL_TYPE = training_settings["model"]
+  BATCH_SIZE = training_settings["batch_size"]
+  WORKER_NR = training_settings["data_workers"]
+
+  random.seed(training_settings["seed"])
+  torch.manual_seed(training_settings["seed"])
+  np.random.seed(training_settings["seed"])
+
+  ###################
+  # Load the datasets
+  trainingfiles = utils.checkfiles(training_settings["training_data"])
+  testfiles = utils.checkfiles(training_settings["test_data"])
+  if training_settings["dataloader_type"] in ("surface", "coord"):
+    training_data = DATALOADER_TYPES[training_settings["dataloader_type"]](trainingfiles, target_np=training_settings["pointnet_points"])
+    test_data = DATALOADER_TYPES[training_settings["dataloader_type"]](testfiles, target_np=training_settings["pointnet_points"])
+  elif MODEL_TYPE == "pointnet": 
+    training_data = DATALOADER_TYPES[MODEL_TYPE](trainingfiles, target_np=training_settings["pointnet_points"])
+    test_data = DATALOADER_TYPES[MODEL_TYPE](testfiles, target_np=training_settings["pointnet_points"])
+  else: 
+    training_data = DATALOADER_TYPES[MODEL_TYPE](trainingfiles)
+    test_data = DATALOADER_TYPES[MODEL_TYPE](testfiles)
+  print(f"Training data size: {len(training_data)}; Test data size: {len(test_data)}; Batch size: {BATCH_SIZE}; Worker number: {WORKER_NR}")
+
+  ###################
+  # Load the model
+  classifier = get_model(MODEL_TYPE, training_settings["class_nr"])
+  print(f"Classifier: {classifier}")
+
+  ###################
+  # Load the pretrained model
+  if training_settings["pretrained"] and len(training_settings["pretrained"]) > 0:
+    classifier.load_state_dict(torch.load(training_settings["pretrained"]))
+  else: 
+    raise ValueError(f"Unexpected pretrained model {training_settings['pretrained']}")
+  if USECUDA:
+    classifier.cuda()
+  
+  results_train = np.full(len(training_data), -1, dtype=np.int32)
+  ground_truth_train = np.full(len(training_data), -1, dtype=np.int32)
+  results_test = np.full(len(test_data), -1, dtype=np.int32)
+  ground_truth_test = np.full(len(test_data), -1, dtype=np.int32)
+  with torch.no_grad():
+    classifier.eval()
+    c = 0
+    print("Getting the predictions from the training dataset")
+    for data, target in training_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR):
+      if isinstance(training_data, dataloader.CoordDataset) or isinstance(training_data, dataloader.SurfDataset):
+        data = data.transpose(2, 1)  
+      if USECUDA:
+        data, target = data.cuda(), target.cuda()
+      pred = classifier(data)
+      if isinstance(classifier, PointNetCls) or isinstance(pred, tuple):
+        pred = pred[0]
+      elif hasattr(pred, "logits"): 
+        # Get the logit if the huggingface models is used
+        pred = pred.logits
+      pred_choice = torch.argmax(pred, dim=1)
+      elem_nr = len(pred)
+      results_train[c:c+elem_nr] = pred_choice.cpu().detach().numpy()
+      ground_truth_train[c:c+elem_nr] = target.cpu().detach().numpy()
+      c += elem_nr
+    c = 0
+    print("Getting the predictions from the test dataset")
+    for data, target in test_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR):
+      if isinstance(test_data, dataloader.CoordDataset) or isinstance(test_data, dataloader.SurfDataset):
+        data = data.transpose(2, 1)  
+      if USECUDA:
+        data, target = data.cuda(), target.cuda()
+      pred = classifier(data)
+      if isinstance(classifier, PointNetCls) or isinstance(pred, tuple):
+        pred = pred[0]
+      elif hasattr(pred, "logits"): 
+        # Get the logit if the huggingface models is used
+        pred = pred.logits
+      pred_choice = torch.argmax(pred, dim=1)
+      elem_nr = len(pred_choice)
+      results_test[c:c+elem_nr] = pred_choice.cpu().detach().numpy()
+      ground_truth_test[c:c+elem_nr] = target.cpu().detach().numpy()
+
+      c += elem_nr
+  
+  if -1 in results_train or -1 in results_test:
+    raise ValueError("Unexpected error in the prediction")
+  elif -1 in ground_truth_train or -1 in ground_truth_test:
+    raise ValueError("Unexpected error in the ground truth")
+
+  outfolder = training_settings["output_folder"]
+  pretrained_model_file = training_settings["pretrained"]
+  filename = os.path.basename(pretrained_model_file)
+  if "result_predictions" in training_settings:
+    outfilename = training_settings["result_predictions"]
+  else:
+    outfilename = filename.replace(".pth", "_results.h5")
+    outfilename = os.path.join(outfolder, outfilename)
+  print(f"Saving the results in {outfilename}")
+  with h5.File(outfilename, "w") as f:
+    f.create_dataset("predicted_train", data=results_train, dtype=np.int32, chunks=True)
+    f.create_dataset("predicted_test", data=results_test, dtype=np.int32, chunks=True)
+    f.create_dataset("ground_truth_train", data=ground_truth_train, dtype=np.int32, chunks=True)
+    f.create_dataset("ground_truth_test", data=ground_truth_test, dtype=np.int32, chunks=True)
   
 
 if __name__ == "__main__":
   """
   Test the model with 
-
   """
 
   args = parse_args()
   SETTINGS = vars(args)
-  _SETTINGS = json.dumps(SETTINGS, indent=2)
   print("Settings of this training:")
-  print(_SETTINGS)
-
-  # with open(os.path.join(SETTINGS["output_folder"], "settings.json"), "w") as f:
-  #   f.write(_SETTINGS)
 
   # Read the input meta-information 
   with open(SETTINGS["meta_information"], "r") as f:
     meta_information = json.load(f)
-    # del meta_information["training_data"]
     del meta_information["test_data"]
     del meta_information["pretrained"]
-
+    if SETTINGS["training_data"] != None:
+      del meta_information["training_data"]
     update_pointnr(meta_information["pointnet_points"])
     update_dataloader_type(meta_information["dataloader_type"])
 
   SETTINGS.update(meta_information)  # Update the settings with the requested meta-information 
-
-  print(SETTINGS)
+  print(json.dumps(SETTINGS, indent=2))
   
   loss_on_train, accuracy_on_train, loss_on_test, accuracy_on_test = perform_testing(SETTINGS)
-
 
   # Find matched model file and set the corresponding output column
   print(f"Updating the performance data in {SETTINGS['output_file']}, with the pretrained model {SETTINGS['pretrained']}")
   df = pd.read_csv(SETTINGS["output_file"], index_col=None)
-  df.loc[df["param_path"] == SETTINGS["pretrained"], "acc_test"] = accuracy_on_test
-  df.loc[df["param_path"] == SETTINGS["pretrained"], "loss_test"] = loss_on_test
-  df.loc[df["param_path"] == SETTINGS["pretrained"], "acc_train"] = accuracy_on_train
-  df.loc[df["param_path"] == SETTINGS["pretrained"], "loss_train"] = loss_on_train
-  df.to_csv(SETTINGS["output_file"], index=False)
-  
-
-
+  df.loc[(df["param_path"] == SETTINGS["pretrained"]) * (df["testdata_path"] == SETTINGS["test_data"]), "acc_test"] = accuracy_on_test
+  df.loc[(df["param_path"] == SETTINGS["pretrained"]) * (df["testdata_path"] == SETTINGS["test_data"]), "loss_test"] = loss_on_test
+  df.loc[(df["param_path"] == SETTINGS["pretrained"]) * (df["testdata_path"] == SETTINGS["test_data"]), "acc_train"] = accuracy_on_train
+  df.loc[(df["param_path"] == SETTINGS["pretrained"]) * (df["testdata_path"] == SETTINGS["test_data"]), "loss_train"] = loss_on_train
+  df.to_csv(SETTINGS["output_file"], index=False) 
 
 

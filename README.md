@@ -4,10 +4,12 @@ FEater (Flexibility and Elasticity Assessment Tools for Essential Residues) prop
 models to flexible and elastic objects.  -->
 
 ## Installation
-### Compile from source
 ```
-micromamba activate env   # Assume micromamba being the package manager. Could replace with conda. 
-git clone https://github.com/miemiemmmm/FEater.git && cd FEater && make install
+micromamba activate feater_env     # Assume micromamba being the package manager. Could replace with conda. 
+git clone https://github.com/miemiemmmm/FEater.git
+cd FEater
+make install
+pip install git+https://github.com/miemiemmmm/SiESTA.git  # Install SiESTA-Surf if surface-based featurization is required
 ```
 To compile the module for voxel generation, NVCC (NVIDIA CUDA Compiler) is required. If CUDA runtime is not in the default path (/usr/local/cuda), for instance on a supercomputer, you might want to set the following environment variables to match the corresponding [GPU architecture](https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html#gpu-feature-list). 
 ```
@@ -42,11 +44,13 @@ bash feater/scripts/generate_miniset.py
 ```
 
 
-## Feature generation 
+## Featurization 
 ### Surface generation
 Surface generation requires the installation of [SiESTA-Surf](https://github.com/miemiemmmm/SiESTA). 
 
 ### Voxel generation
+
+### Hilbert curve generation
 
 
 ### Example scripts
@@ -70,15 +74,7 @@ viewvoxel -f TestSet_Voxel.h5 -i 15 -r XXXX_Dataset.h5
 ```
 
 
-
-
-
-
-
-
-
-
-## Cite this work
+<!-- ## Cite this work
 If you find FEater useful in your research, please consider citing it in the following formats:
 
 Bibtex style
@@ -93,7 +89,7 @@ Bibtex style
   doi = {10.5281/zenodo.10593541},
   url = {https://doi.org/10.5281/zenodo.10593541}
 }
-```
+``` -->
 
-## Useful URLs
-[FEater paper](https://zenodo.org/records/10593541/files/FEater_paper.pdf)
+<!-- ## Useful URLs
+[FEater paper](https://zenodo.org/records/10593541/files/FEater_paper.pdf) -->

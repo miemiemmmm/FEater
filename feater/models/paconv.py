@@ -1,3 +1,10 @@
+"""
+Original PyTorch implementation of PAConv from the paper: https://arxiv.org/abs/2103.14635
+
+Code is adopted from:
+https://github.com/CVMI-Lab/PAConv/blob/main/obj_cls/model/DGCNN_PAConv.py
+"""
+
 
 import torch.nn as nn
 import torch

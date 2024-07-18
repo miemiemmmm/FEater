@@ -80,7 +80,7 @@ def console_interface():
   settings = vars(args)
 
   workernr = settings["process_nr"]
-  batch_size=settings["batch_size"]
+  batch_size = settings["batch_size"]
   input_file = settings["input_file"]
   exit_point = settings["exit_point"]
 

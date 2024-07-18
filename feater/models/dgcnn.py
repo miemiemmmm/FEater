@@ -1,16 +1,14 @@
+"""
+PyTorch implementation of DGCMM from the paper: https://arxiv.org/pdf/1801.07829
+
+Code is adopted from: 
+https://github.com/antao97/dgcnn.pytorch/blob/master/model.py
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.init as init
 import torch.nn.functional as F
-
-"""
-PyTorch implementation of the paper: 
-Dynamic Graph CNN for Learning on Point Clouds (DGCNN)(https://arxiv.org/pdf/1801.07829).
-
-Code of the model adopted from: 
-https://github.com/antao97/dgcnn.pytorch/blob/master/model.py
-
-"""
 
 
 def knn(x, k):

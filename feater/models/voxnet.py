@@ -1,16 +1,17 @@
-import numpy as np 
+"""
+PyTorch implement of VoxNet from the paper: https://doi.org/10.1109/IROS.2015.7353481
+
+Code is adopted from:
+https://github.com/MonteYang/VoxNet.pytorch/blob/master/voxnet.py
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from collections import OrderedDict
 
-
 class VoxNet(nn.Module):
   """
-  VoxNet model
-
-  Original code is adopted from: https://github.com/MonteYang/VoxNet.pytorch/blob/master/voxnet.py
-  
   Notes
   -----
   Compared with the original model, ReLU is chnaged to PReLU(1, 0.25)

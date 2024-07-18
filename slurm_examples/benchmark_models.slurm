@@ -2,7 +2,7 @@
 #SBATCH --job-name=benchmark_1000             			# NOTE: Job name and output/error files
 #SBATCH --output=/Weiss/benchmark_models/benchmarking_results_%a.out
 #SBATCH --error=/Weiss/benchmark_models/benchmarking_results_%a.err
-#SBATCH --array=21   #Following tasks, 24-31
+#SBATCH --array=1,5        #Following tasks, 24-31
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
@@ -54,13 +54,13 @@ model_type=$(python -c "import sys; filestr = sys.argv[1]; files=[i for i in fil
 output_paths=${output_dir}/${model_type}_${data_type}_${loader_type}/
 mkdir -p ${output_paths}
 
-pretrained_model="/Weiss/benchmark_models/paconv_dual_surface/paconv_64.pth"
-start_epoch=65
+pretrained_model=""
+start_epoch=0
 
 total_epoch=120
 batch_size=64
 
-lr_init=0.0001    # TODO doing test on Gnina with 1e-4 and 1e-5
+lr_init=0.001    # TODO doing test on Gnina with 1e-4 
 lr_decay_steps=30
 lr_decay_rate=0.5
 

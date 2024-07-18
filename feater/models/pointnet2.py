@@ -1,18 +1,15 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-# from pointnet2_utils import PointNetSetAbstraction
-
 """
+Pytorch implementation of PointNet++ classification network for the paper: https://arxiv.org/abs/1706.02413
+
+Code is adopted from:
 https://github.com/yanx27/Pointnet_Pointnet2_pytorch/blob/master/models/pointnet2_cls_msg.py
 """
 
-from time import time
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-def timeit(tag, t):
-    print("{}: {}s".format(tag, time() - t))
-    return time()
 
 def pc_normalize(pc):
     l = pc.shape[0]

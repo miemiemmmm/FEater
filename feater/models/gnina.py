@@ -1,14 +1,13 @@
+"""
+PyTorch implementation of Gnina default2018: https://doi.org/10.1021/acs.jcim.0c00411
+
+Code is adopted from: 
+https://github.com/gnina/models/blob/master/pytorch/default2018_model.py
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-"""
-Gnina
-PyTorch version of the Default2018 architecture
-
-Code adopted from:
-https://github.com/gnina/models/blob/master/pytorch/default2018_model.py
-"""
 
 class GninaNetwork(nn.Module):
     def __init__(self, out_dims):

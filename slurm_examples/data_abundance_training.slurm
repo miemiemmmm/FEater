@@ -2,10 +2,10 @@
 #SBATCH --job-name=data_abundance             			# NOTE: Job name and output/error files
 #SBATCH --output=/Weiss/data_scarce_test/model_combination_%a.out
 #SBATCH --error=/Weiss/data_scarce_test/model_combination_%a.err
-#SBATCH --array=8-15,22-27
+#SBATCH --array=16-18
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=24
+#SBATCH --cpus-per-task=8
 
 
 # export SLURM_ARRAY_TASK_ID=7   % TODO
@@ -17,7 +17,7 @@ export PYTHONUNBUFFERED=1
 
 
 # Get the task-specific parameters according to the task id start from 0
-index_file="/MieT5/MyRepos/FEater/slurm_examples/joblist.txt"
+index_file="/MieT5/MyRepos/FEater/data/datascarce_joblist.txt"
 train_file=$(awk -v line=${SLURM_ARRAY_TASK_ID} 'NR==line+1 {print $1}' ${index_file})
 test_file=$(awk -v line=${SLURM_ARRAY_TASK_ID} 'NR==line+1 {print $2}' ${index_file})
 data_type=$(awk -v line=${SLURM_ARRAY_TASK_ID} 'NR==line+1 {print $3}' ${index_file})

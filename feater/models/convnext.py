@@ -1,17 +1,9 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-
-# All rights reserved.
-
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-
 """
-ConvNeXt
+Original PyTorch implementation of ConvNeXt and ConvNeXtIsotropic models: https://arxiv.org/abs/2201.03545
 
-Original code adopted from
+Code is adopted from: 
 https://github.com/facebookresearch/ConvNeXt/blob/main/models/convnext.py
 """
-
 
 import torch
 import torch.nn as nn
