@@ -109,7 +109,7 @@ class BaseDataset(data.Dataset):
     return ()
 
   # @profile
-  def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, v=0, **kwargs):
+  def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, v=0, exit_point=999999999, **kwargs):
     """
     Base class for the mini-batch iteration. 
     """
@@ -120,6 +120,8 @@ class BaseDataset(data.Dataset):
     st = time.perf_counter()
     batches = split_array(indices, batch_size)
     for batch_idx, batch in enumerate(batches): 
+      if batch_idx >= exit_point: 
+        break
       if batch_idx < kwargs.get("start_batch", 0): 
         continue
       elif batch_idx > kwargs.get("end_batch", len(batches)):
@@ -197,15 +199,22 @@ class CoordDataset(BaseDataset):
     if index >= self.total_entries:
       raise IndexError(f"Index {index} is out of range. The dataset has {self.total_entries} entries.")
     info = self.mini_batch_task(index)
-    data = readdata(*info)
+    ret_data = readdata(*info)
     label = readlabel(self.get_file(index), self.get_position(index))
     if self.do_padding:
-      data = self.padding(data)
-
-    data = np.array(data, dtype=np.float32)
-    label = np.array(label, dtype=np.int64)
-    data = torch.from_numpy(data)
-    label = torch.from_numpy(label)
+      data_numpy  = np.zeros((self.target_np, 3), dtype=np.float32)
+      ret_data = ret_data[np.sum(ret_data, axis=1) != 0]   # Mask the 0,0,0 points
+      ret_data -= np.min(ret_data, axis=0)
+      ret_pointnr = ret_data.shape[0]
+      if ret_pointnr < self.target_np:
+        shuffuled = np.random.choice(self.target_np, ret_pointnr, replace=False)
+        data_numpy[shuffuled, :] = ret_data
+      else:
+        shuffuled = np.random.choice(ret_pointnr, self.target_np, replace=False)
+        data_numpy = np.array(ret_data[shuffuled, :], dtype=np.float32)
+    else:
+      data_numpy = np.array(ret_data, dtype=np.float32)
+    data = torch.from_numpy(data_numpy)
     return data, label
   
   def mini_batch_task(self, index): 
@@ -282,16 +291,25 @@ class SurfDataset(BaseDataset):
       raise IndexError(f"Index {index} is out of range. The dataset has {self.total_entries} entries.")
     # Prepare the task and read the data
     task = self.mini_batch_task(index)
-    data = readdata(*task)
+    ret_data = readdata(*task)
     label = readlabel(self.get_file(index), self.get_position(index))
     # Perform padding if necessary
     if self.do_padding:
-      data = self.padding(data)
+      data_numpy = np.zeros((self.target_np, 3), dtype=np.float32)
+      ret_data = ret_data[np.sum(ret_data, axis=1) != 0]
+      ret_data -= np.min(ret_data, axis=0)
+      ret_pointnr = ret_data.shape[0]
+      if ret_pointnr < self.target_np:
+        shuffuled = np.random.choice(self.target_np, ret_pointnr, replace=False)
+        data_numpy[shuffuled, :] = ret_data
+      else:
+        shuffuled = np.random.choice(ret_pointnr, self.target_np, replace=False)
+        data_numpy = np.array(ret_data[shuffuled, :], dtype=np.float32)
+    else:
+      data_numpy = np.array(ret_data, dtype=np.float32)
+    
     # Convert the data to torch.Tensor
-    data = np.array(data, dtype=np.float32)
-    label = np.array(label, dtype=np.int64)
-    data = torch.from_numpy(data)
-    label = torch.from_numpy(label)
+    data = torch.from_numpy(data_numpy)
     return data, label
 
   def get_label(self, index):
@@ -365,10 +383,9 @@ class SurfDataset(BaseDataset):
     surf.compute_vertex_normals()
     surf.paint_uniform_color([0.5, 0.5, 0.5])
     print(f"The surface {index}/{len(self)} has {len(vert)} vertices and {len(face)} faces., time: {time.perf_counter() - st:8.2f}")
-
     return surf
 
-    
+
 class HilbertCurveDataset(BaseDataset):
   def __init__(self, hdffiles: list):
     super().__init__(hdffiles)

@@ -5,13 +5,8 @@ Example:
   python benchmark_hdf.py -f /diskssd/yzhang/Data_test/feater_database_surf/TrainingSet_LEU.h5 \
     -b 256 -p 12 -e 1000 -d coord -c 1 -v 1
 """
-
-import time, os
-import argparse
-import multiprocessing as mp
-
+import time, os, sys, json, argparse
 from feater import dataloader
-from torch.utils.data import DataLoader
 
 
 # @profile
@@ -56,28 +51,30 @@ def benchmark_dataset_method(dset, exit_point=None, **kwargs):
       break
 
 def argument_parser():
-  parser = argparse.ArgumentParser(description="Benchmarking the data extraction speed of the HDF5 dataset.")
-  parser.add_argument("-f", '--input-file', type=str, help="Input file path.")
-  parser.add_argument("-b", "--batch-size", default=128, type=int, help="Batch size.")
-  parser.add_argument("-p", "--process-nr", default=8, type=int, help="Number of processes.")
-  parser.add_argument("-e", "--exit-point", default=999999, type=int, help="Exit point.")
-  parser.add_argument("-d", "--dataloader-type", type=str, help="Use dataloader.")
-  parser.add_argument("-c", "--tocuda", default=0, type=int, help="Transfer data to cuda.") 
-  parser.add_argument("-v", "--verbose", default=0, type=int, help="Verbose mode.")
-  #### Point-cloud specific arguments
-  parser.add_argument("--pointnr", type=int, default=None, help="Number of points.")
+  parser = argparse.ArgumentParser(description="Benchmarking the data extraction speed of the HDF dataset.")
+  parser.add_argument("-f", '--input-file', type=str, required=True, help="The absolute path of the input HDF5 file.")
+  parser.add_argument("-d", "--dataloader-type", type=str, required=True, help="Specify the dataloader type; [coord, surface, voxel, hilbert]")
+  parser.add_argument("-b", "--batch-size", default=128, type=int, help="Batch size; Default: 128.")
+  parser.add_argument("-p", "--process-nr", default=8, type=int, help="Number of processes; Default: 8.")
+  parser.add_argument("-e", "--exit-point", default=999999, type=int, help="Exit the benchmarking after N batches.")
+  parser.add_argument("-c", "--tocuda", default=0, type=int, help="Transfer data to cuda or not; Default: 0.") 
+  parser.add_argument("-v", "--verbose", default=0, type=int, help="Verbose mode; Default: 0.")
+  # Specific for the dataloader
+  parser.add_argument("--pointnr", type=int, default=None, help="Number of points if the dataloader is point-based [coord or surface].")
 
   args = parser.parse_args()
-  if args.input_file is None: 
-    raise ValueError("Input file is not specified.")
-  if os.path.exists(args.input_file) is False: 
-    raise FileNotFoundError(f"Input file {args.input_file} does not exist.")
+  if args.input_file is None or not os.path.exists(args.input_file): 
+    print("Fatal: Please specify a valid input file. ", file=sys.stderr)
+    parser.print_help()
+    exit(1)
   
   return args
 
 def console_interface(): 
   args = argument_parser()
   settings = vars(args)
+  print("Arguments: ")
+  print(json.dumps(settings, indent=2))
 
   workernr = settings["process_nr"]
   batch_size = settings["batch_size"]

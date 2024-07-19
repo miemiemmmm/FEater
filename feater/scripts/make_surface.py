@@ -1,4 +1,4 @@
-import os, argparse, time
+import os, sys, argparse, time, json
 
 import numpy as np
 import multiprocessing as mp
@@ -6,21 +6,14 @@ from feater import io, utils
 
 import siesta
 
-
-# std::map<char, float> radiusDic = {
-#   {'O', 1.52f}, {'C', 1.70f}, {'N', 1.55f},
-#   {'H', 1.20f}, {'S', 1.80f}, {'P', 1.80f},
-#   {'X', 1.40f}
-# };
-
 mass_to_rad_map = {
   16: 1.52, 
   12: 1.70, 
   14: 1.55, 
-  1: 1.20, 
+  1:  1.20, 
   32: 1.80, 
   31: 1.80, 
-  0: 1.40
+  0:  1.40
 }
 
 # @profile
@@ -50,12 +43,11 @@ def coord_to_surf(hdffile, idx, settings):
 def make_hdf(inputhdf:str, outputhdf:str, interp_settings:dict):
   with io.hdffile(inputhdf, "r") as f: 
     entry_nr = f["label"].shape[0]
-    print("Processing", entry_nr, "entries")
-  # entry_nr = 5000
-  BATCH_SIZE = 500
+    print(f"Processing {entry_nr} entries in the input HDF file")
+  BATCH_SIZE = 1000
+  CHUNK_SIZE = 1000
   BIN_NR = (entry_nr + BATCH_SIZE - 1) // BATCH_SIZE
   NR_PROCESS = int(interp_settings.get("processes", 8))
-
   
   # Write the meta information 
   with io.hdffile(outputhdf, "a") as f: 
@@ -66,18 +58,14 @@ def make_hdf(inputhdf:str, outputhdf:str, interp_settings:dict):
     if "slice_number" not in f.keys():
       utils.add_data_to_hdf(f, "slice_number", np.array([interp_settings["slice_number"]], dtype=np.int32), maxshape=[1])
 
-
   batches = np.array_split(np.arange(entry_nr), BIN_NR)
   batches_lens = np.array([len(_b) for _b in batches])
   batches_cumsum = np.cumsum([0] + list(batches_lens))
-  print(batches_cumsum, BIN_NR, "bins")
-  pool = mp.Pool(processes=NR_PROCESS)
-  
-  for idx, batch in enumerate(batches):
-    if idx < interp_settings["start_batch"]:
-      print(f"Skiping batch {idx+1}/{len(batches)}: {len(batch)} files")
-      continue
+  print(f"Splitted the job into {len(batches)} batches with ~{np.mean(batches_lens)} entries in each batch")
 
+  pool = mp.Pool(processes=NR_PROCESS)
+  for idx, batch in enumerate(batches):
+    print(f"Processing batch {idx+1:4} / {len(batches):<6} containing {len(batch):6} entries")
     st_batch = time.perf_counter()
     tasks = [(inputhdf, i, interp_settings) for i in batch]
     # results = [coord_to_surf(*task) for task in tasks]
@@ -139,18 +127,21 @@ def make_hdf(inputhdf:str, outputhdf:str, interp_settings:dict):
     slice_labels = np.s_[batches_cumsum[idx]:batches_cumsum[idx]+len(label_buffer)]
 
     with io.hdffile(outputhdf, "a") as f:
-      print(f"Processing xyzr slice: {idx_xyzr} -> {idx_xyzr+np.uint64(len(xyzr_buffer))}")
-      
-      utils.update_hdf_by_slice(f, "xyzr", xyzr_buffer, xyzr_slice, dtype=np.float32, maxshape=[None, 4], compression="gzip", compression_opts=4)
-      utils.update_hdf_by_slice(f, "vertices", vertex_buffer, vert_slice, dtype=np.float32, maxshape=[None, 3], compression="gzip", compression_opts=4)
-      utils.update_hdf_by_slice(f, "faces", face_buffer, face_slice, dtype=np.int32, maxshape=[None, 3], compression="gzip", compression_opts=4)
-      utils.update_hdf_by_slice(f, "label", label_buffer, slice_labels, dtype=np.int32, maxshape=[None], compression="gzip", compression_opts=4)
-      utils.update_hdf_by_slice(f, "xyzr_starts", xyzr_st_buffer, slice_labels, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
-      utils.update_hdf_by_slice(f, "xyzr_ends", xyzr_ed_buffer, slice_labels, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
-      utils.update_hdf_by_slice(f, "vert_starts", vert_st_buffer, slice_labels, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
-      utils.update_hdf_by_slice(f, "vert_ends", vert_ed_buffer, slice_labels, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
-      utils.update_hdf_by_slice(f, "face_starts", face_st_buffer, slice_labels, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
-      utils.update_hdf_by_slice(f, "face_ends", face_ed_buffer, slice_labels, dtype=np.uint64, maxshape=[None], compression="gzip", compression_opts=4)
+      print(f"Dumping the batch {idx+1} / {len(batches)} into the output HDF file")
+      extra_config = {}
+      if "compress_level" in interp_settings.keys() and interp_settings["compress_level"] > 0:
+        extra_config["compression"] = "gzip"
+        extra_config["compression_opts"] = interp_settings["compress_level"]
+      utils.update_hdf_by_slice(f, "xyzr", xyzr_buffer, xyzr_slice, dtype=np.float32, maxshape=[None, 4], chunks=(CHUNK_SIZE, 4), **extra_config)
+      utils.update_hdf_by_slice(f, "vertices", vertex_buffer, vert_slice, dtype=np.float32, maxshape=[None, 3], chunks=(CHUNK_SIZE, 3), **extra_config)
+      utils.update_hdf_by_slice(f, "faces", face_buffer, face_slice, dtype=np.int32, maxshape=[None, 3], chunks=(CHUNK_SIZE, 3), **extra_config)
+      utils.update_hdf_by_slice(f, "label", label_buffer, slice_labels, dtype=np.int32, maxshape=[None], chunks=(CHUNK_SIZE), **extra_config)
+      utils.update_hdf_by_slice(f, "xyzr_starts", xyzr_st_buffer, slice_labels, dtype=np.uint64, maxshape=[None], chunks=(CHUNK_SIZE), **extra_config)
+      utils.update_hdf_by_slice(f, "xyzr_ends", xyzr_ed_buffer, slice_labels, dtype=np.uint64, maxshape=[None], chunks=(CHUNK_SIZE), **extra_config)
+      utils.update_hdf_by_slice(f, "vert_starts", vert_st_buffer, slice_labels, dtype=np.uint64, maxshape=[None], chunks=(CHUNK_SIZE), **extra_config)
+      utils.update_hdf_by_slice(f, "vert_ends", vert_ed_buffer, slice_labels, dtype=np.uint64, maxshape=[None], chunks=(CHUNK_SIZE), **extra_config)
+      utils.update_hdf_by_slice(f, "face_starts", face_st_buffer, slice_labels, dtype=np.uint64, maxshape=[None], chunks=(CHUNK_SIZE), **extra_config)
+      utils.update_hdf_by_slice(f, "face_ends", face_ed_buffer, slice_labels, dtype=np.uint64, maxshape=[None], chunks=(CHUNK_SIZE), **extra_config)
 
     print(f"Batch {idx+1:4d} / {len(batches):4d} ({len(batch):4d} entries) done in {(time.perf_counter() - st_batch)*1000:6.2f} us, Average speed: {(time.perf_counter() - st_batch)*1000 / len(batch):6.2f} us per entry")
 
@@ -158,24 +149,43 @@ def make_hdf(inputhdf:str, outputhdf:str, interp_settings:dict):
   pool.join()
 
 def parse_args():
-  parser = argparse.ArgumentParser(description="Make HDF5")
-  parser.add_argument("-i", "--input", type=str, help="The file writes all of the absolute path of coordinate files")
-  parser.add_argument("-o", "--output", type=str, help="The output HDF5 file")
-  parser.add_argument("--processes", type=int, default=8, help="The number of processes")
-  parser.add_argument("--start_batch", type=int, default=0, help="The number of processes")
+  parser = argparse.ArgumentParser(description="Generate surface HDF file from the coordinate file")
+  parser.add_argument("-i", "--input", type=str, help="The absolute path of the input coordinate HDF files")
+  parser.add_argument("-o", "--output", type=str, help="The absolute path of the output surface HDF file")
+  parser.add_argument("-c", "--compress-level", type=int, default=0, help="The compression level for the HDF deposition. Default is 0 (no compression)")
+  parser.add_argument("-f", "--force", type=int, default=0, help="Force overwrite the output file")
+  parser.add_argument("-g", "--grid-spacing", type=float, default=0.35, help="The grid spacing for surface generation")
+  parser.add_argument("--processes", type=int, default=8, help="The number of processes for parallel processing")
   args = parser.parse_args()
+
+  if (args.input is None) or (not os.path.exists(args.input)):
+    print("Fatal: Please specify the input file", file=sys.stderr)
+    parser.print_help()
+    exit(1)
+  elif (args.output is None):
+    print("Fatal: Please specify the output file", file=sys.stderr)
+    parser.print_help()
+    exit(1)
+  elif (os.path.exists(args.output)) and (not args.force):
+    print(f"Fatal: Output file '{args.output}' exists. Use -f to force overwrite", file=sys.stderr)
+    parser.print_help()
+    exit(1)
+  elif (os.path.exists(args.output)) and args.force:
+    os.remove(args.output)
+    print(f"Warning: Output file '{args.output}' exists. Overwriting...")
   return args
 
 
 def console_interface():
   args = parse_args()
-  print(vars(args))
+  print("Arguments: ")
+  print(json.dumps(vars(args), indent=2))
   SurfConfig = {
-    "grid_spacing": 0.35,
+    "grid_spacing": args.grid_spacing,
     "smooth_step": 1,
     "slice_number": 300,
     "processes": args.processes,
-    "start_batch": args.start_batch,
+    "compress_level": args.compress_level,
   }
 
   make_hdf(args.input, args.output, SurfConfig)
@@ -183,21 +193,4 @@ def console_interface():
 
 if __name__ == "__main__":
   console_interface()
-  
-  # filelists = "/media/yzhang/MieT72/Data/feater_database/ValidationSet_ALA.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_ARG.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_ASN.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_ASP.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_CYS.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_GLN.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_GLU.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_GLY.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_HIS.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_ILE.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_LEU.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_LYS.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_MET.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_PHE.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_PRO.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_SER.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_THR.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_TRP.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_TYR.txt%/media/yzhang/MieT72/Data/feater_database/ValidationSet_VAL.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ALA.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ARG.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ASN.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ASP.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_CYS.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_GLN.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_GLU.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_GLY.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_HIS.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_ILE.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_LEU.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_LYS.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_MET.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_PHE.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_PRO.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_SER.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_THR.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_TRP.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_TYR.txt%/media/yzhang/MieT72/Data/feater_database/TestSet_VAL.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ALA.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ARG.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ASN.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ASP.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_CYS.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_GLN.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_GLU.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_GLY.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_HIS.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_ILE.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_LEU.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_LYS.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_MET.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_PHE.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_PRO.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_SER.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_THR.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_TRP.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_TYR.txt%/media/yzhang/MieT72/Data/feater_database/TrainingSet_VAL.txt"
-  # listfiles = filelists.strip("%").split("%")
-  # print(f"Processing {len(listfiles)} list files")
-  #
-  # basepath = "/media/yzhang/MieT72/Data/feater_database"
-  # outputdir = "/media/yzhang/MieT72/Data/feater_database_surf"
-  #
-  # for listfile in listfiles[50:51]:
-  #   resname = os.path.basename(listfile).split(".")[0].split("_")[1]
-  #   _filename = os.path.basename(listfile).split(".")[0]
-  #   outfile = os.path.join(outputdir, f"{_filename}.h5")
-  #   files = utils.checkfiles(listfile, basepath=basepath)
-  #   print(f"Found {len(files)} files in the {listfile}, will write to {outfile}")
-  #   make_hdf(outfile, files)
-
-
 

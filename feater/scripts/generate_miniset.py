@@ -2,7 +2,7 @@
 Generate a mini-set for the feater dataset 
 """
 
-import json, os, time
+import json, os, time, argparse
 import h5py
 import numpy as np
 import feater.io
@@ -51,7 +51,6 @@ def make_indices(sourcefile, indicefile, label_nr, target_nr):
 
 def generate_coord_miniset(sourcefile, minisetoutput, indicefile, label_nr, force=False, compression_level=4): 
   """
-
   """
   if os.path.exists(minisetoutput) and not force:
     raise ValueError(f"File {minisetoutput} already exists")
@@ -109,7 +108,6 @@ def generate_coord_miniset(sourcefile, minisetoutput, indicefile, label_nr, forc
         if compression_level > 0:
           kwargs["compression"] = "gzip"
           kwargs["compression_opts"] = compression_level
-          print(f"Using compression level {compression_level}")
 
         utils.add_data_to_hdf(hdf, "coordinates",   coord_buffer,       dtype=np.float32, maxshape=[None, 3], chunks=(32,3), **kwargs)
         utils.add_data_to_hdf(hdf, "elements",      elems_buffer,       dtype=np.int32,   maxshape=[None],    chunks=True,   **kwargs)
@@ -184,7 +182,6 @@ def generate_surf_miniset(sourcefile, outputfile, indicefile, label_nr, force=Fa
         if compression_level > 0:
           kwargs["compression"] = "gzip"
           kwargs["compression_opts"] = compression_level
-          print(f"Using compression level {compression_level}")
 
         utils.add_data_to_hdf(f, "xyzr",        xyzr_buffer,    dtype=np.float32, maxshape=[None, 4], chunks=(1000, 4), **kwargs)
         utils.add_data_to_hdf(f, "vertices",    vertex_buffer,  dtype=np.float32, maxshape=[None, 3], chunks=(1000, 3), **kwargs)
@@ -241,7 +238,6 @@ def generate_vox_miniset(sourcefile, outputfile, indicefile, label_nr, force=Fal
         if compression_level > 0:
           kwargs["compression"] = "gzip"
           kwargs["compression_opts"] = compression_level
-          print(f"Using compression level {compression_level}")
         utils.add_data_to_hdf(hdf, "voxel", voxel_buffer, dtype=np.float32, chunks=(1, 32, 32, 32), maxshape=(None, 32, 32, 32), **kwargs)
         utils.add_data_to_hdf(hdf, "label", label_buffer, dtype=np.int32, chunks=True, maxshape=[None], **kwargs)
   print(f"Finished processing the dataset; Time elapsed: {time.perf_counter()-st:.2f} seconds")
@@ -283,18 +279,40 @@ def generate_hilbert_miniset(sourcefile, outputfile, indicefile, label_nr, force
         if compression_level > 0:
           kwargs["compression"] = "gzip"
           kwargs["compression_opts"] = compression_level
-          print(f"Using compression level {compression_level}")
         utils.add_data_to_hdf(hdf, "voxel", voxel_buffer, dtype=np.float32, chunks=(1, 128, 128), maxshape=(None, 128, 128), **kwargs)
         utils.add_data_to_hdf(hdf, "label", label_buffer, dtype=np.int32,   chunks=True,          maxshape=[None],           **kwargs)
   print(f"Finished processing the dataset; Time elapsed: {time.perf_counter()-st:.2f} seconds")
 
-if "__main__" == __name__: 
-  label_nr = 400               # NOTE: 20 or 400
-  target_nr = 125
-  outputdir = "/Weiss/feater_loader_benchmark_50k"
-  compression_level = 0
-  whichset = "train"     # NOTE: "train" or "test"; If other files are needed, please modify the code accordingly 
-  index_regeneration = False
+
+def parse(): 
+  parser = argparse.ArgumentParser(description="Generate a mini-set for the feater dataset")
+  parser.add_argument("-d", "--dataset-type", type=str, required=True, help="The type of dataset to be generated, either dual or single")
+  parser.add_argument("-s", "--subset-size", type=int, required=True, help="The size of the subset")
+  parser.add_argument("-o", "--output-dir", type=str, required=True, help="The output directory")
+  parser.add_argument("-c", "--compression-level", type=int, default=0, help="The compression level")
+  parser.add_argument("--index-regeneration", type=bool, default=False, help="Whether to regenerate the indices")
+
+  # Automatic perception of the source files
+  parser.add_argument("--whichset", type=str, default="train", help="Try to find the source files in the FEATER_DATA directory")
+  
+  # Manually define the source files
+  parser.add_argument("--coordfile", type=str, help="Manually define the coordinate file to be used")
+  parser.add_argument("--surfacefile", type=str, help="Manually define the surface file to be used")
+  parser.add_argument("--voxelfile", type=str, help="Manually define the voxel file to be used")
+  parser.add_argument("--hilbertfile", type=str, help="Manually define the hilbert file to be used")
+  
+  return parser.parse_args()
+
+
+def console_interface(): 
+  args = parse()
+
+  mark = args.dataset_type
+  target_nr = args.subset_size
+  outputdir = args.output_dir
+  compression_level = args.compression_level
+  whichset = args.whichset
+  index_regeneration = args.index_regeneration
 
   #############################################################################
   ################# Finished the definition of needed parms ###################
@@ -302,59 +320,87 @@ if "__main__" == __name__:
   if not os.path.exists(outputdir):
     os.makedirs(outputdir)
 
-  if label_nr == 400:
-    mark = "dual"
-  elif label_nr == 20:
-    mark = "single"
+  if mark == "dual":
+    label_nr = 400
+  elif mark == "single":
+    label_nr = 20
   else: 
-    raise ValueError("label_nr must be either 400 or 20")
+    raise ValueError("Dataset type must be either dual or single")
 
   indicefile = os.path.join(outputdir, f"Miniset_Indices_{target_nr}_{mark}.json")
   OutputFiles = [
-    os.path.join(outputdir, f"Miniset_Coord_{target_nr}_{mark}.h5"),
-    os.path.join(outputdir, f"Miniset_Surf_{target_nr}_{mark}.h5"),
-    os.path.join(outputdir, f"Miniset_Vox_{target_nr}_{mark}.h5"),
-    os.path.join(outputdir, f"Miniset_Hilbert_{target_nr}_{mark}.h5")
+    # os.path.join(outputdir, f"Miniset_Coord_{target_nr}_{mark}.h5"),
+    # os.path.join(outputdir, f"Miniset_Surf_{target_nr}_{mark}.h5"),
+    # os.path.join(outputdir, f"Miniset_Vox_{target_nr}_{mark}.h5"),
+    # os.path.join(outputdir, f"Miniset_Hilbert_{target_nr}_{mark}.h5")
+    os.path.join(outputdir, f"Mini{target_nr}_{whichset}_coord.h5"),
+    os.path.join(outputdir, f"Mini{target_nr}_{whichset}_surface.h5"),
+    os.path.join(outputdir, f"Mini{target_nr}_{whichset}_voxel.h5"),
+    os.path.join(outputdir, f"Mini{target_nr}_{whichset}_hilbert.h5")
   ]
 
+  DATADIR = os.path.abspath(os.environ.get("FEATER_DATA", "/tmp/FEater_Data"))
   if whichset == "train":
     print(f"Using the TRAIN dataset ")
     DualSourceFiles = [
-      "/Weiss/FEater_Dual_PDBHDF/TrainingSet_Dataset.h5", 
-      "/Weiss/FEater_Dual_SURF/TrainingSet_Surface.h5",
-      "/Weiss/FEater_Dual_VOX/TrainingSet_Voxel.h5",
-      "/Weiss/FEater_Dual_HILB/TrainingSet_Hilbert.h5"
+      f"{DATADIR}/FEater_Dual/TrainingSet_coord.h5", 
+      f"{DATADIR}/FEater_Dual/TrainingSet_surface.h5",
+      f"{DATADIR}/FEater_Dual/TrainingSet_voxel.h5",
+      f"{DATADIR}/FEater_Dual/TrainingSet_hilbert.h5"
     ]
     SingleSourceFiles = [
-      "/Weiss/FEater_Single_PDBHDF/TrainingSet_Dataset.h5",
-      "/Weiss/FEater_Single_SURF/TrainingSet_Surface.h5",
-      "/Weiss/FEater_Single_VOX/TrainingSet_Voxel.h5",
-      "/Weiss/FEater_Single_HILB/TrainingSet_Hilbert.h5",
+      f"{DATADIR}/FEater_Single/TrainingSet_coord.h5", 
+      f"{DATADIR}/FEater_Single/TrainingSet_surface.h5",
+      f"{DATADIR}/FEater_Single/TrainingSet_voxel.h5",
+      f"{DATADIR}/FEater_Single/TrainingSet_hilbert.h5"
     ]
   elif whichset == "test":
     print(f"Using the TEST dataset ")
     DualSourceFiles = [
-      "/Weiss/FEater_Dual_PDBHDF/TestSet_Dataset.h5",
-      "/Weiss/FEater_Dual_SURF/TestSet_Surface.h5",
-      "/Weiss/FEater_Dual_VOX/TestSet_Voxel.h5",
-      "/Weiss/FEater_Dual_HILB/TestSet_Hilbert.h5",
+      f"{DATADIR}/FEater_Dual/TestSet_coord.h5", 
+      f"{DATADIR}/FEater_Dual/TestSet_surface.h5",
+      f"{DATADIR}/FEater_Dual/TestSet_voxel.h5",
+      f"{DATADIR}/FEater_Dual/TestSet_hilbert.h5"
     ]
     
     SingleSourceFiles = [
-      "/Weiss/FEater_Single_PDBHDF/TestSet_Dataset.h5",
-      "/Weiss/FEater_Single_SURF/TestSet_Surface.h5",
-      "/Weiss/FEater_Single_VOX/TestSet_Voxel.h5",
-      "/Weiss/FEater_Single_HILB/TestSet_Hilbert.h5",
+      f"{DATADIR}/FEater_Single/TestSet_coord.h5", 
+      f"{DATADIR}/FEater_Single/TestSet_surface.h5",
+      f"{DATADIR}/FEater_Single/TestSet_voxel.h5",
+      f"{DATADIR}/FEater_Single/TestSet_hilbert.h5"
+    ]
+  elif whichset == "valid":
+    print(f"Using the VALIDATION dataset ")
+    DualSourceFiles = [
+      f"{DATADIR}/FEater_Dual/ValidationSet_coord.h5",
+      f"{DATADIR}/FEater_Dual/ValidationSet_surface.h5",
+      f"{DATADIR}/FEater_Dual/ValidationSet_voxel.h5",
+      f"{DATADIR}/FEater_Dual/ValidationSet_hilbert.h5",
+    ]
+    SingleSourceFiles = [
+      f"{DATADIR}/FEater_Single/Validation_coord.h5",
+      f"{DATADIR}/FEater_Single/Validation_surface.h5",
+      f"{DATADIR}/FEater_Single/Validation_voxel.h5",
+      f"{DATADIR}/FEater_Single/Validation_hilbert.h5",
     ]
   else: 
-    raise ValueError("whichset must be either train or test")
+    DualSourceFiles = ["", "", "", ""]
+    SingleSourceFiles = ["", "", "", ""]
 
   if label_nr == 400:
     SourceFiles = DualSourceFiles
   elif label_nr == 20:
     SourceFiles = SingleSourceFiles
-
   
+  if args.coordfile is not None: 
+    SourceFiles[0] = args.coordfile
+  if args.surfacefile is not None:
+    SourceFiles[1] = args.surfacefile
+  if args.voxelfile is not None:
+    SourceFiles[2] = args.voxelfile
+  if args.hilbertfile is not None:
+    SourceFiles[3] = args.hilbertfile
+
   if index_regeneration or (not os.path.exists(indicefile)):
     # Firstly make the indices
     seed = label_nr
@@ -367,19 +413,42 @@ if "__main__" == __name__:
     else:
       raise FileNotFoundError(f"Indices file {indicefile} does not exist")
 
-  generate_coord_miniset(SourceFiles[0], OutputFiles[0], indicefile, label_nr, force=True, compression_level=compression_level)
-  with open(os.path.join(outputdir, f"{mark}_coord.txt"), "w") as f: 
-    f.write(os.path.abspath(OutputFiles[0]) + "\n")
-  
-  generate_surf_miniset(SourceFiles[1], OutputFiles[1], indicefile, label_nr, force=True, compression_level=compression_level)
-  with open(os.path.join(outputdir, f"{mark}_surf.txt"), "w") as f: 
-    f.write(os.path.abspath(OutputFiles[1]) + "\n")
+  for fidx, src_f in enumerate(SourceFiles):
+    if len(src_f) == 0: 
+      continue 
+    elif not os.path.exists(src_f):
+      print(f"Warning: File {src_f} does not exist; Skipping...")
+      continue
+    if fidx == 0:
+      print(f"Processing the coord file {SourceFiles[0]}")
+      generate_coord_miniset(SourceFiles[0], OutputFiles[0], indicefile, label_nr, force=True, compression_level=compression_level)
+      with open(os.path.join(outputdir, f"{mark}_coord.txt"), "w") as f: 
+        f.write(os.path.abspath(OutputFiles[0]) + "\n")
+    elif fidx == 1:
+      print(f"Processing the surface file {SourceFiles[1]}")
+      generate_surf_miniset(SourceFiles[1], OutputFiles[1], indicefile, label_nr, force=True, compression_level=compression_level)
+      with open(os.path.join(outputdir, f"{mark}_surf.txt"), "w") as f: 
+        f.write(os.path.abspath(OutputFiles[1]) + "\n")
+    elif fidx == 2:
+      print(f"Processing the voxel file {SourceFiles[2]}")
+      generate_vox_miniset(SourceFiles[2], OutputFiles[2], indicefile, label_nr, force=True, compression_level=compression_level)
+      with open(os.path.join(outputdir, f"{mark}_vox.txt"), "w") as f: 
+        f.write(os.path.abspath(OutputFiles[2]) + "\n")
+    elif fidx == 3:
+      print(f"Processing the hilbert file {SourceFiles[3]}")
+      generate_hilbert_miniset(SourceFiles[3], OutputFiles[3], indicefile, label_nr, force=True, compression_level=compression_level)
+      with open(os.path.join(outputdir, f"{mark}_hilbert.txt"), "w") as f: 
+        f.write(os.path.abspath(OutputFiles[3]) + "\n")
 
-  generate_vox_miniset(SourceFiles[2], OutputFiles[2], indicefile, label_nr, force=True, compression_level=compression_level)
-  with open(os.path.join(outputdir, f"{mark}_vox.txt"), "w") as f: 
-    f.write(os.path.abspath(OutputFiles[2]) + "\n")
 
-  generate_hilbert_miniset(SourceFiles[3], OutputFiles[3], indicefile, label_nr, force=True, compression_level=compression_level)
-  with open(os.path.join(outputdir, f"{mark}_hilbert.txt"), "w") as f: 
-    f.write(os.path.abspath(OutputFiles[3]) + "\n")
+
+if "__main__" == __name__: 
+  console_interface()
+
+  # mark = "dual"               # NOTE: 20 or 400
+  # target_nr = 20
+  # outputdir = "/Weiss/test_miniset/FEater_Mini200/FEater_Dual"
+  # compression_level = 4
+  # whichset = "train"     # NOTE: "train" or "test"; If other files are needed, please modify the code accordingly 
+  # index_regeneration = False
 

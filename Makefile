@@ -1,21 +1,58 @@
-install:
+FEATER_DATA ?= $(shell realpath ./data)
+# Update the ZENODO_ID to the latest version of the dataset
+ZENODO_ID ?= 12783988
+
+install: clean
+		pip install build
 		python -m build && pip install --force-reinstall -v dist/feater-0.0.1-py3-none-any.whl
+		$(MAKE) clean
+
+# micromamba install ambertools 
+
+install_dependencies: 
+	pip install git+https://github.com/miemiemmmm/SiESTA.git hilbertcurve matplotlib open3d 
+	$(MAKE) dependency_training
+
+# ViT/SwinTransformer and tensorboard while training
+dependency_training: 
+		pip install tensorboard transformers torch torchvision
+
+clean: 
+		rm -rf build dist feater.egg-info
 
 einstall:
 		pip install --force-reinstall .
 
-runpdb:
-		pdbprocess -i /MieT5/BetaPose/data/complexes/complex_filelist.txt -d /media/yzhang/MieT72/Data/feater_test4/  \
-		-wp 1 -wm 0 -ws 0 -wo 0 -prod 1 -r 0 -wn 40 -tn 1
-
 compile:
 		cd src && make voxelize.so
 
-download_all:
-		mkdir -p data && cd data \
-		&& wget https://zenodo.org/api/records/10593541/files-archive -O FEater_Data.zip \
-		&& unzip FEater_Data.zip 
+download_source: 
+		mkdir -p $(FEATER_DATA)
+		cd $(FEATER_DATA) && wget https://zenodo.org/records/$(ZENODO_ID)/files/FEater_Dual_PDBSRC.tar.gz -O FEater_Dual_PDBSRC.tar.gz
+		cd $(FEATER_DATA) && wget https://zenodo.org/records/$(ZENODO_ID)/files/FEater_Single_PDBSRC.tar.gz -O FEater_Single_PDBSRC.tar.gz
+
+
+download_feater:
+		mkdir -p $(FEATER_DATA)
+		cd $(FEATER_DATA) && wget https://zenodo.org/records/$(ZENODO_ID)/files/FEater_Dual.tar.gz -O FEater_Dual.tar.gz 
+		cd $(FEATER_DATA) && wget https://zenodo.org/records/$(ZENODO_ID)/files/FEater_Single.tar.gz -O FEater_Single.tar.gz
+		cd $(FEATER_DATA) && tar -xzvf FEater_Dual.tar.gz && rm -f FEater_Dual.tar.gz
+		cd $(FEATER_DATA) && tar -xzvf FEater_Single.tar.gz && rm -f FEater_Single.tar.gz
+
+
+download_feater_single: 
+		mkdir -p $(FEATER_DATA)
+		cd $(FEATER_DATA) && wget https://zenodo.org/records/$(ZENODO_ID)/files/FEater_Single.tar.gz -O FEater_Single.tar.gz
+		cd $(FEATER_DATA) && tar -xzvf FEater_Single.tar.gz && rm -f FEater_Single.tar.gz
+
+
+download_feater_dual:
+		mkdir -p $(FEATER_DATA)
+		cd $(FEATER_DATA) && wget https://zenodo.org/records/$(ZENODO_ID)/files/FEater_Dual.tar.gz -O FEater_Dual.tar.gz
+		cd $(FEATER_DATA) && tar -xzvf FEater_Dual.tar.gz && rm -f FEater_Dual.tar.gz
+
 
 download_miniset: 
-		mkdir -p data/miniset && cd data \
-		&& echo "Downloading miniset" \
+		mkdir -p $(FEATER_DATA)
+		cd $(FEATER_DATA) && wget https://zenodo.org/records/$(ZENODO_ID)/files/FEater_Mini200.tar.gz -O FEater_Mini200.tar.gz
+		cd $(FEATER_DATA) && tar -xzvf FEater_Mini200.tar.gz

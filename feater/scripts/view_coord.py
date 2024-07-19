@@ -1,9 +1,8 @@
-import os, time, random, argparse, json
+import os, time, argparse, json
 
 import numpy as np
 import open3d as o3d
 
-from matplotlib import colormaps
 from feater import io
 from siesta.scripts import view_obj
 
@@ -279,20 +278,18 @@ def main_render(inputfile:str, index:int, args):
   vis.destroy_window()
 
 def parse_args():
-  parser = argparse.ArgumentParser()
-  parser.add_argument("-f", "--fileinput", type=str, help="The input HDF5 file")
+  parser = argparse.ArgumentParser(description="View the coordinates in the coordinate HDF file")
+  parser.add_argument("-f", "--fileinput", type=str, required=True, help="The input HDF file")
   parser.add_argument("-i", "--index", type=int, default=0, help="The index of the molecule to be viewed")
   parser.add_argument("-l", "--index_list", type=str, default="", help="The list of indices to be viewed")
-  parser.add_argument("-b", "--box", type=int, default=1, help="Add the bounding box. Default: 1")
-  parser.add_argument("-m", "--markcenter", default=1, type=int, help="Mark the center of the voxel (Marked by a green sphere). Default: 1")
-  parser.add_argument("-r", "--render_json", type=str, default="", help="The camera settings")
-  parser.add_argument("-t", "--topology", type=int, default=0, help="The topology file (optional)")
-  parser.add_argument("-s", "--save_fig", type=int, default=0, help="Save the figure. Default: 0")
-  parser.add_argument("--stuck", type=int, default=1, help="Stuck the viewer. Default: 1")
+  parser.add_argument("-b", "--box", type=int, default=1, help="Add a bounding box; Default: 1")
+  parser.add_argument("-m", "--markcenter", default=1, type=int, help="Mark the center of the voxel (Marked by a green sphere); Default: 1")
+  parser.add_argument("-t", "--topology", type=int, default=0, help="Get topology (Whether or not to display the bonds); Default: 0")
+  parser.add_argument("-s", "--save_fig", type=int, default=0, help="Save the figure; Default: 0")
+  parser.add_argument("--stuck", type=int, default=1, help="Stuck the viewer; Default: 1")
+  parser.add_argument("-r", "--render_json", type=str, default="", help="The camera settings in JSON format. ")
   parser.add_argument("--representation", type=str, default="mesh", help="The representation of the molecule. Default: stick")
   args = parser.parse_args()
-  if args.fileinput is None:
-    raise ValueError("Input file is not specified")
   if not os.path.exists(args.fileinput):
     raise ValueError(f"Input file {args.fileinput} does not exist")
   return args
@@ -308,8 +305,3 @@ def console_interface():
 
 if __name__ == "__main__":
   console_interface()
-
-
-# python /MieT5/MyRepos/FEater/feater/scripts/view_coord.py -f /media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_${res}.h5 --top /media/yzhang/MieT72/Data/feater_database_coord/Topology_${res}.pdb -c ScreenCamera.json -i ${i} -m 0 -b 0
-# python /MieT5/MyRepos/FEater/feater/scripts/view_coord.py -f /media/yzhang/MieT72/Data/feater_database_coord/ValidationSet_ASN.h5 \
-# --top /media/yzhang/MieT72/Data/feater_database_coord/Topology_ASN.pdb  -b 0 -i 250 -m 0 

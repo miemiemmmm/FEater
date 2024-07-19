@@ -108,7 +108,6 @@ def parse_args():
 
   if (args.input is None) or (not os.path.exists(args.input)):
     print("Fatal: Please specify the input file", file=sys.stderr)
-    # print help
     parser.print_help()
     exit(1)
 
@@ -132,19 +131,11 @@ def parse_args():
 
 def console_interface():
   args = parse_args()
-  files = utils.checkfiles(args.input) # [:888] #TODO: remove this
+  files = utils.checkfiles(args.input)    # [:888] #TODO: remove this
   print(f"Found {len(files)} files in the list")
   make_hdf(args.output, files, vars(args))
 
 
 if __name__ == "__main__":
   console_interface()
-  
-  # hdf_output = "test.hdf5"
-  # file_list = "/MieT5/tests/FEater/feater/scripts/tmpflist.txt"
-  # files = checkfiles(file_list)
-  # print(f"There are {len(files)} files in the list")
-  # make_hdf(hdf_output, files)
-  # print(f"Generation of HDF file is finished")
-
 

@@ -1,4 +1,4 @@
-import os, time, random, argparse
+import os, time, argparse, json
 
 import numpy as np
 import open3d as o3d
@@ -139,9 +139,11 @@ def main_render(inputfile:str, index:int, args):
     dims = np.asarray(hdf["dimensions"])
     boxsize = np.asarray(hdf["boxsize"])
     scale_factor = boxsize / dims
-  print(f"Residue {constants.LAB2RES_DUAL[labeli]} ; Reading took: {time.perf_counter() - st:6.2f}s")
-  print("Reading the coordinate")
-  print(f"The scale factor is {scale_factor}")
+    if np.max(hdf["label"][-10:]) > 20: 
+      resname = constants.LAB2RES_DUAL[labeli]
+    else: 
+      resname = constants.LAB2RES[labeli]
+  print(f"Residue {resname} ; Reading took: {time.perf_counter() - st:6.2f}s")
   # Reading the reference file
   if args.reference:
     with io.hdffile(args.reference, "r") as hdf:  
@@ -161,7 +163,7 @@ def main_render(inputfile:str, index:int, args):
   print(f"Coodinate reading took {time.perf_counter() - st:6.2f}s")
   # Main rendering functions
   vis = o3d.visualization.Visualizer()
-  vis.create_window(window_name="HDF viewer", width=600, height=600)
+  vis.create_window(window_name="HDF viewer", width=1000, height=1000)
 
   geoms_voxel = get_geo_voxeli(voxeli, cmap=args.cmap, percentile=args.percentile, hide=args.hide, scale_factor=scale_factor)
   for geo in geoms_voxel:
@@ -187,6 +189,7 @@ def main_render(inputfile:str, index:int, args):
     sphere.paint_uniform_color([0, 1, 0])
     vis.add_geometry(sphere)
 
+  print("Rendering the scene, press 'q' to quit the window")
   vis.poll_events()
   vis.update_renderer()
   vis.run()
@@ -204,11 +207,11 @@ def main_render(inputfile:str, index:int, args):
     for geo in geoms_box:
       geo.compute_vertex_normals()
       final_obj += geo
-  o3d.io.write_triangle_mesh("/home/yzhang/Desktop/test.ply", 
-                             final_obj,
-                             write_ascii=True,
-                             write_vertex_normals=True, 
-                             write_vertex_colors=True )
+  if args.save_ply:
+    plyfile = "/tmp/test.ply"
+    print(f"Saving the visualization to the ply file: {plyfile}")
+    o3d.io.write_triangle_mesh(plyfile,  final_obj, write_ascii=True, 
+                               write_vertex_normals=True, write_vertex_colors=True)
 
 def parse_args():
   parser = argparse.ArgumentParser()
@@ -220,6 +223,7 @@ def parse_args():
   parser.add_argument("-m", "--markcenter", default=1, type=int, help="Mark the center of the voxel (Marked by a green sphere). Default: 1")
   parser.add_argument("-r", "--reference", type=str, default=None, help="The reference file to be compared with")
   parser.add_argument("-b", "--boundingbox", type=int, default=1, help="Add bounding box to the voxel. Default: 1")
+  parser.add_argument("-s", "--save-ply", type=int, default=0, help="Save the visualization to a ply file. Default: 0")
   args = parser.parse_args()
   if not os.path.exists(args.fileinput):
     raise ValueError(f"Input file {args.fileinput} does not exist")
@@ -228,7 +232,7 @@ def parse_args():
 
 def console_interface():
   args = parse_args()
-  print(args)
+  print(json.dumps(vars(args), indent=2))
   main_render(args.fileinput, args.index, args)
 
 if __name__ == "__main__":

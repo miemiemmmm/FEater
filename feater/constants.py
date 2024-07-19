@@ -1,5 +1,4 @@
 # Constant contents for FEater
-
 __all__ = [
   'RES2LAB',
   'LAB2RES',

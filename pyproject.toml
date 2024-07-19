@@ -10,6 +10,8 @@ authors = [
     {name = "Yang Zhang", email = "y.zhang@bioc.uzh.ch"},
 ]
 dependencies = [
+    "h5py",
+    "numpy<2.0",
 ]
 requires-python = ">=3.7"
 readme = "README.md"
@@ -24,9 +26,17 @@ viewcoord = "feater.scripts.view_coord:console_interface"
 viewsurf = "feater.scripts.view_surf:console_interface"
 viewvoxel = "feater.scripts.view_voxel:console_interface"
 
+makecoord = "feater.scripts.make_coord:console_interface"
+makesurface = "feater.scripts.make_surface:console_interface"
+makevoxel = "feater.scripts.make_voxel:console_interface"
+makehilbert = "feater.scripts.make_hilbert:console_interface"
+
+benchmarkdataset = "feater.scripts.benchmark_hdf:console_interface"
+feater_train = "feater.scripts.train_models:console_interface"
+feater_miniset = "feater.scripts.generate_miniset:console_interface"
+
 # viewhilb = "feater.scripts.view_voxel:"
 # fixres = "feater.scripts.fix_residue:run_resfixer"
-# pdbprocess = "feater.scripts.process_pdb:run_pdbprocess"
-# pdb2hdf = "feater.scripts.make_HDF:console_interface"
-# pdb2nc = "feater.scripts.make_NetCDF:console_interface"
+
+
 

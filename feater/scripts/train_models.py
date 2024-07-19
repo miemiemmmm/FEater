@@ -19,6 +19,7 @@ from feater import dataloader, utils
 import feater
 
 tensorboard_writer = None 
+args = None
 
 # For point cloud type of data, the input is in the shape of (B, 3, N)
 INPUT_POINTS = 0
@@ -258,7 +259,6 @@ def parse_args():
   if not os.path.exists(args.test_data):
     raise ValueError(f"The test data file {args.test_data} does not exist.")
   
-  # utils.parser_sanity_check(parser)
   if args.dataloader_type is None: 
     args.dataloader_type = args.model
 
@@ -277,6 +277,7 @@ def parse_args():
   else: 
     os.makedirs(args.output_folder)
     args.output_folder = os.path.abspath(args.output_folder)
+    print("Warning: The output folder does not exist. Created the folder {args.output_folder}.")
 
   # Change the type of the cuda flag
   if args.data_type == "single":
@@ -468,6 +469,24 @@ def perform_training(training_settings: dict):
     if accuracy_on_test > 0.995: 
       print(f"Early stopping at epoch {epoch} due to the high accuracy on the test set (accuracy > 0.995)")
       break
+
+def console_interface():
+  global tensorboard_writer
+  global args
+  args = parse_args()
+  SETTINGS = vars(args)
+  _SETTINGS = json.dumps(SETTINGS, indent=2)
+  print("Arguments of this training:")
+  print(_SETTINGS)
+  with open(os.path.join(SETTINGS["output_folder"], "settings.json"), "w") as f:
+    f.write(_SETTINGS)
+
+  if (args.verbose > 0) or (not args.production): 
+    if not os.path.exists(os.path.join(SETTINGS["output_folder"], "tensorboard")): 
+      os.makedirs(os.path.join(SETTINGS["output_folder"], "tensorboard")) 
+    tensorboard_writer = SummaryWriter(os.path.join(SETTINGS["output_folder"], "tensorboard"))
+
+  perform_training(SETTINGS)
 
 if __name__ == "__main__":
   """
