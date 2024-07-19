@@ -2,7 +2,7 @@
 FEater (Flexibility and Elasticity Assessment Tools for Essential Residues) is a molecular fragment dataset for 3D flexible objects recognition. 
 
 
-[Download dataset](https://zenodo.org/records/10593541) | [Code](https://github.com/miemiemmmm/FEater)
+[Download dataset](https://zenodo.org/records/12783988) | [Code](https://github.com/miemiemmmm/FEater)
 
 ## Installation
 Run the following commands to install the package. This assumes micromamba being your python package manager. Feel free to replace it with your preferred package manager. 
@@ -28,7 +28,7 @@ export CUDA_COMPUTE_CAPABILITY=sm_80
 
 ## Dataset availability 
 ### FEater-Single and FEater-Dual datasets (Coordinate HDF only)
-FEater-Single and FEater-Dual datasets are available for free access and download on [Zenodo](https://zenodo.org/records/10593541). 
+FEater-Single and FEater-Dual datasets are available for free access and download on [Zenodo](https://zenodo.org/records/12783988). 
 Due to the size of the 3D data (surface/voxel/hilbert), hosting them on public repository is not feasible (also not efficient). 
 Only the coordinate representation with their molecular topologies are available for download. 
 The following [featurization](#featurization) section provides the necessary tools to generate the other 3D data from the original coordinate dataset. 
@@ -67,20 +67,19 @@ make download_source
     <strong>NOTE:</strong> Operations in a folder with such a vast number of tiny files may lead to significant performance degradation on the host system. 
 </div>
 
-<!-- Alternatively, you can use the command below to download the full FEater dataset along with its **Minisets**:
-```
-wget https://zenodo.org/api/records/10593541/files-archive -O FEater_Data.zip
-``` -->
+
 <!-- The coordinate feature, identified by the suffix **_PDB.tar.gz**, is stored in HDF (Hierarchical Data Format) alongside the topology for each label. View the [following chapter](#data-loading-interation-and-spliting) for further details of its usage.  -->
 
 
 ## Data loading and iteration 
-There are four built-in dataloaders for different molecular representations: **CoordDataset**, **VoxelDataset**, **SurfDataset**, **HilbertCurveDataset**. The child method **mini_batches** is used to iterate over the dataset.
+There are four built-in dataloaders for different molecular representations: **CoordDataset**, **VoxelDataset**, **SurfDataset**, **HilbertCurveDataset**. 
+The child method **mini_batches** is implemented to iterate throughout the dataset. 
+Multiple files can be passed as a list for the dataloader.
 
 ```python
 import feater, os
 traning_file = os.path.join(os.getenv('FEATER_DATA'), 'FEater_Single/TrainingSet_coord.h5')
-dset = feater.dataloader.CoordDataset([traning_file], target_np=24)  # NOTE: Multiple files can be passed as a list
+dset = feater.dataloader.CoordDataset([traning_file], target_np=24) 
 print(dset[1])
 for data, label in dset.mini_batches(batch_size=64, process_nr=16, exit_point=10):
   print(data.shape, label.shape)
