@@ -29,13 +29,20 @@ class GninaNetwork(nn.Module):
             nn.Conv3d(64, out_channels=128,padding=1,kernel_size=3,stride=1),   # unit5_conv
             nn.ReLU(),
         )
-        dummy_output = self.features(torch.zeros(1, input_channels, grid_dims[0], grid_dims[1], grid_dims[2]))
-        flattened_feature_size = dummy_output.flatten().size()[0]
+        dummy_output = self.features(torch.zeros(2, input_channels, grid_dims[0], grid_dims[1], grid_dims[2])) 
+        flattened_feature_size = torch.flatten(dummy_output, 1).size()[1]
         self.affinity_output = nn.Linear(flattened_feature_size, out_dims)
+        self.bn = nn.BatchNorm1d(flattened_feature_size)
+        self.relu = nn.ReLU()
+
+    def featurize(self, x):
+        x = self.features(x)
+        x = self.relu(self.bn(torch.flatten(x, 1)))
+        return x
 
     def forward(self, x): 
         x = self.features(x)
-        x = nn.Flatten()(x)
+        x = torch.flatten(x, 1)
         affinity = self.affinity_output(x)
         return affinity
             
@@ -85,7 +92,7 @@ class _GninaNetwork(nn.Module):
         last_size = int(dims[1]//div * dims[2]//div * dims[3]//div * 128)
         print(last_size)
         flattener = View((-1,last_size))
-        self.add_module('flatten',flattener)
+        self.add_module('flatten', flattener)
         self.modules_.append(flattener)
         self.affinity_output = nn.Linear(last_size, out_dims)
         # self.pose_output = nn.Linear(last_size,2)

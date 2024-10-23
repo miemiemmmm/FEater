@@ -21,7 +21,7 @@ clean:
 		rm -rf build dist feater.egg-info
 
 einstall:
-		pip install --force-reinstall .
+		pip install -e .
 
 compile:
 		cd src && make voxelize.so

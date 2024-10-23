@@ -82,3 +82,5 @@ echo "Task finished at $(date +%Y-%m-%d-%H:%M:%S)"
 
 
 
+# python train_fused_models.py -m gnina_pointnet -train /Weiss/clustered_single/TrainingSet_NonRedund_vox.h5%/Weiss/clustered_single/TrainingSet_NonRedund.h5 -test /Weiss/clustered_single/TestSet_NonRedund_vox.h5%/Weiss/clustered_single/TestSet_NonRedund.h5 -o /tmp/ -w 12 --test-number 4000 -b 128 -e 1 -lr 0.0001 --lr-decay-steps 30 --lr-decay-rate 0.5 --target_np 24 
+

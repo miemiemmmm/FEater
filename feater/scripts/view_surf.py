@@ -39,10 +39,8 @@ def get_surfi(hdf, index:int) -> np.ndarray:
 
 def main_render(inputfile:str, index:int, args):
   with io.hdffile(inputfile, "r") as hdf:
-    # hdf.draw_structure()
     # Get the necessary geometries
     surf = get_surfi(hdf, index)
-    balls = get_coordi(hdf, index)
 
   vis = o3d.visualization.Visualizer()
   vis.create_window(window_name="Surface viewer", width=1400, height=1400)
@@ -55,31 +53,36 @@ def main_render(inputfile:str, index:int, args):
     vis.add_geometry(surf)
 
   if args.balls:
+    with io.hdffile(inputfile, "r") as hdf: 
+      if "xyzr_starts" not in hdf.keys():
+        print("Fatal: The input HDF5 file does not contain the atom XYZR (Not likely a molecular dataset).")
+        exit(1)
+      balls = get_coordi(hdf, index)
     for ball in balls:
       vis.add_geometry(ball)
   vis.run()
   vis.destroy_window()
-
-  # Save the object to a file
-  final_obj = o3d.geometry.TriangleMesh()
-  # Only add points 
-  from matplotlib import colormaps
-  cmap = colormaps.get_cmap("jet")
-  vertnr = np.array(surf.vertices).shape[0]
-  for idx, vert in enumerate(surf.vertices):
-    if np.linalg.norm(vert) == 0:
-      continue
-    box = o3d.geometry.TriangleMesh.create_box(width=0.075, height=0.075, depth=0.075)
-    box.translate(vert)
-    color = cmap(idx/vertnr)[:3]
-    box.paint_uniform_color(color)
-    final_obj += box
-
-  for ball in balls:
-    ball.compute_vertex_normals()
-    final_obj += ball
   
   if args.save:
+    # Save the object to a file
+    final_obj = o3d.geometry.TriangleMesh()
+    # Only add points 
+    from matplotlib import colormaps
+    cmap = colormaps.get_cmap("jet")
+    vertnr = np.array(surf.vertices).shape[0]
+    for idx, vert in enumerate(surf.vertices):
+      if np.linalg.norm(vert) == 0:
+        continue
+      box = o3d.geometry.TriangleMesh.create_box(width=0.075, height=0.075, depth=0.075)
+      box.translate(vert)
+      color = cmap(idx/vertnr)[:3]
+      box.paint_uniform_color(color)
+      final_obj += box
+
+    if args.balls:
+      for ball in balls:
+        ball.compute_vertex_normals()
+        final_obj += ball
     o3d.io.write_triangle_mesh("/home/yzhang/Desktop/final_obj.ply", final_obj, write_ascii=True, write_vertex_normals=True, write_vertex_colors=True)
 
 
@@ -88,7 +91,7 @@ def parse_args():
   parser.add_argument("-f", "--fileinput", type=str, help="The input HDF5 file")
   parser.add_argument("-i", "--index", type=int, default=0, help="The index of the molecule to be viewed; Default: 0 ")
   parser.add_argument("-w", "--wireframe", type=int, default=1, help="Show the wireframe of the surface; Default: 1 ")
-  parser.add_argument("-b", "--balls", type=int, default=1, help="Show the atoms as balls (xyz+radius); Default: 1 ")
+  parser.add_argument("-b", "--balls", type=int, default=0, help="Show the atoms as balls (xyz+radius); Default: 0 ")
   parser.add_argument("-s", "--save", type=int, default=0, help="Save the final object to a file; Default: 0.")
   args = parser.parse_args()
   return args

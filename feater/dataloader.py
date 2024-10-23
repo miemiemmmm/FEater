@@ -14,6 +14,10 @@ __all__ = [
   "VoxelDataset",
   "SurfDataset",
   "HilbertCurveDataset", 
+  "readdata",
+  "readlabel",
+  "readtop",
+  "split_array",
 ]
 
 
@@ -46,7 +50,6 @@ def padding(points, target_np):
   return points
 
 
-
 def split_array(input_array, batch_size): 
   # For the N-1 batches, the size is uniformed and only variable for the last batch
   bin_nr = (len(input_array) + batch_size - 1) // batch_size 
@@ -66,6 +69,8 @@ class BaseDataset(data.Dataset):
     self.hdffiles = []
     self.total_entries = 0
     self.do_padding = False
+    self.do_scaling = False
+
     # Prepare the map size for the dataset
     for file in hdffiles:
       self.hdffiles.append(file)
@@ -106,65 +111,102 @@ class BaseDataset(data.Dataset):
     return np.s_[self.get_start(index):self.get_end(index)]
 
   def mini_batch_task(self, index): 
-    return ()
+    raise NotImplementedError("The mini_batch_task method should be implemented in the subclass.")
 
-  # @profile
   def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, v=0, exit_point=999999999, **kwargs):
     """
     Base class for the mini-batch iteration. 
     """
     pool = mp.Pool(process_nr)
     indices = np.arange(self.total_entries)
-    if shuffle:
-      np.random.shuffle(indices)
-    st = time.perf_counter()
-    batches = split_array(indices, batch_size)
-    for batch_idx, batch in enumerate(batches): 
-      if batch_idx >= exit_point: 
-        break
-      if batch_idx < kwargs.get("start_batch", 0): 
-        continue
-      elif batch_idx > kwargs.get("end_batch", len(batches)):
-        break
-      tasks = [self.mini_batch_task(i) for i in batch]
-      ret_data = pool.starmap(readdata, tasks)
+    with mp.Pool(process_nr) as pool:
+      if shuffle:
+        seed = kwargs.get('seed', None)
+        if seed is not None:
+          np.random.seed(seed)
+        np.random.shuffle(indices)
+      st = time.perf_counter()
+      batches = split_array(indices, batch_size)
+      for batch_idx, batch in enumerate(batches): 
+        if batch_idx >= exit_point: 
+          break
+        if batch_idx < kwargs.get("start_batch", 0): 
+          continue
+        elif batch_idx > kwargs.get("end_batch", len(batches)):
+          break
+        tasks = [self.mini_batch_task(i) for i in batch]
+        ret_data = pool.starmap(readdata, tasks)
 
-      if v: 
-        print(f"Processing {batch_idx} batch of {len(batches)} batches, time: {time.perf_counter() - st:8.2f}")
-        st = time.perf_counter()
-      
+        if v: 
+          print(f"Processing {batch_idx} batch of {len(batches)} batches, time: {time.perf_counter() - st:8.2f}")
+          st = time.perf_counter()
+        
+        if self.do_padding:
+          # Padding the data for heterogeneous shape (coordinates, surface vertices)
+          data_numpy  = np.zeros((len(ret_data), self.target_np, 3), dtype=np.float32)
+          for i, ret in enumerate(ret_data):
+            ret = ret[np.sum(ret, axis=1) != 0]   # Mask the 0,0,0 points
+            ret -= np.min(ret, axis=0)            # Move to the origin
+            ret_pointnr = ret.shape[0]
+            # Shuffle the order of points (n_samples, n_points, 3)
+            if ret_pointnr < self.target_np:
+              # Point number less than target number, shuffle the source points
+              shuffuled = np.random.choice(self.target_np, ret_pointnr, replace=False)
+              data_numpy[i, shuffuled, :] = ret
+            else:
+              # Point number more than target number, randomly select target_np points
+              shuffuled = np.random.choice(ret_pointnr, self.target_np, replace=False)
+              data_numpy[i, ...] = np.array(ret[shuffuled, :], dtype=np.float32)
+        else: 
+          # Homogeneous shape 
+          data_numpy = np.array(ret_data, dtype=np.float32)
+          assert data_numpy.shape == (len(ret_data), 1, *self.shape), f"Shape mismatch: {data_numpy.shape} vs {len(ret_data), *self.shape}"
+        
+        if self.do_scaling:
+          # print("Scaling the data")
+          for i, ret in enumerate(data_numpy):
+            p_max = np.max(ret, axis=0)
+            dist = np.linalg.norm(p_max)
+            data_numpy[i] = ret / dist
+            # print(">> ", dist, np.min(data_numpy[i]), np.max(data_numpy[i]))
+
+        tasks = [(self.get_file(i), self.get_position(i)) for i in batch]
+        labels = pool.starmap(readlabel, tasks)
+        label_numpy = np.array(labels, dtype=np.int64)
+
+        data = torch.from_numpy(data_numpy)
+        label = torch.from_numpy(label_numpy)
+        yield data, label
+
+  def get_batch_by_index(self, index, process_nr=24): 
+    with mp.Pool(process_nr) as pool:
+      tasks = [self.mini_batch_task(i) for i in index]
+      ret_data = pool.starmap(readdata, tasks)
       if self.do_padding:
-        # Padding the data for heterogeneous shape (coordinates, surface vertices)
         data_numpy  = np.zeros((len(ret_data), self.target_np, 3), dtype=np.float32)
         for i, ret in enumerate(ret_data):
-          ret = ret[np.sum(ret, axis=1) != 0]   # Mask the 0,0,0 points
-          ret -= np.min(ret, axis=0)            # Move to the origin
+          ret = ret[np.sum(ret, axis=1) != 0]
+          ret -= np.min(ret, axis=0)
           ret_pointnr = ret.shape[0]
-          # Shuffle the order of points (n_samples, n_points, 3)
           if ret_pointnr < self.target_np:
-            # Point number less than target number, shuffle the source points
             shuffuled = np.random.choice(self.target_np, ret_pointnr, replace=False)
             data_numpy[i, shuffuled, :] = ret
           else:
-            # Point number more than target number, randomly select target_np points
             shuffuled = np.random.choice(ret_pointnr, self.target_np, replace=False)
             data_numpy[i, ...] = np.array(ret[shuffuled, :], dtype=np.float32)
       else: 
-        # Homogeneous shape 
         data_numpy = np.array(ret_data, dtype=np.float32)
         assert data_numpy.shape == (len(ret_data), 1, *self.shape), f"Shape mismatch: {data_numpy.shape} vs {len(ret_data), *self.shape}"
-
-      tasks = [(self.get_file(i), self.get_position(i)) for i in batch]
+      tasks = [(self.get_file(i), self.get_position(i)) for i in index]
       labels = pool.starmap(readlabel, tasks)
       label_numpy = np.array(labels, dtype=np.int64)
-
       data = torch.from_numpy(data_numpy)
       label = torch.from_numpy(label_numpy)
-      yield data, label
 
+    return data, label
 
 class CoordDataset(BaseDataset):
-  def __init__(self, hdffiles:list, target_np=25, padding=True):
+  def __init__(self, hdffiles:list, target_np=25, resmap=None,padding=True):
     """
     Open the HDF files and generate the map for __getitem__ method to correctly locate the data from a set of HDF5 files
     Supports constant time random access to the dataset
@@ -186,6 +228,8 @@ class CoordDataset(BaseDataset):
         self.start_map[global_ind: global_ind+entry_nr_i] = np.asarray(h5file["coord_starts"])
         self.end_map[global_ind: global_ind+entry_nr_i] = np.asarray(h5file["coord_ends"])
         global_ind += entry_nr_i
+    if resmap is not None: 
+      self.resmap = resmap
 
   def __getitem__(self, index):
     """
@@ -217,12 +261,31 @@ class CoordDataset(BaseDataset):
     data = torch.from_numpy(data_numpy)
     return data, label
   
+  def __len__(self):
+    return self.total_entries
+  
+  def __str__(self):
+    return f"<CoordDataset with {self.total_entries} entries>"
+  
+  def get_top(self, index=None, restype=None):
+    if index is None and restype is None:
+      raise ValueError("Either index or restype should be provided.")
+    if index is not None:
+      label = readlabel(self.get_file(index), self.get_position(index))
+      with io.hdffile(self.hdffiles[0], "r") as h5file:
+        if self.resmap is not None: 
+          restype = self.resmap[label]
+        else: 
+          raise ValueError("The resmap is not provided when initializing the dataloader if you want the topology.")
+        top = h5file.get_top(restype)
+    else: 
+      with io.hdffile(self.hdffiles[0], "r") as h5file:
+        top = h5file.get_top(restype)
+    return top
+
   def mini_batch_task(self, index): 
     return (self.get_file(index), "coordinates", self.get_slice(index))
 
-  def mini_batches_(self, batch_size=512, shuffle=False, process_nr=24, **kwargs):
-    for data, label in super().mini_batches(batch_size=batch_size, shuffle=shuffle, process_nr=process_nr, **kwargs): 
-      yield data, label
   
   def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, **kwargs):
     for data, label in super().mini_batches(batch_size=batch_size, shuffle=shuffle, process_nr=process_nr, **kwargs): 
@@ -256,11 +319,14 @@ class VoxelDataset(BaseDataset):
     label = torch.from_numpy(label)
     return data, label
   
-  def mini_batch_task(self, index):
-    return (self.get_file(index), "voxel", np.s_[self.get_start(index):self.get_end(index)])
-
   def __len__(self):
     return self.total_entries
+  
+  def __str__(self):
+    return f"<VoxelDataset with {self.total_entries} entries>"
+  
+  def mini_batch_task(self, index):
+    return (self.get_file(index), "voxel", np.s_[self.get_start(index):self.get_end(index)])
 
   def mini_batches(self, batch_size=512, shuffle=True, process_nr=24, **kwargs):
     for data, label in super().mini_batches(batch_size=batch_size, shuffle=shuffle, process_nr=process_nr, **kwargs): 
@@ -269,10 +335,11 @@ class VoxelDataset(BaseDataset):
 
 
 class SurfDataset(BaseDataset):
-  def __init__(self, hdffiles: list, target_np=1024, padding=True):
+  def __init__(self, hdffiles: list, target_np=1024, padding=True, scale=False):
     super().__init__(hdffiles)
     self.target_np = target_np
     self.do_padding = padding        # When serve as dataloader, do the padding, other wise return the original data
+    self.do_scaling = scale
 
     global_ind = 0
     for fidx, file in enumerate(hdffiles):

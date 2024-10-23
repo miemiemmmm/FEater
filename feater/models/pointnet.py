@@ -146,6 +146,12 @@ class PointNetCls(nn.Module):
     self.bn2 = nn.BatchNorm1d(256)
     self.relu = nn.ReLU()
 
+  def featurize(self, x):
+    x, trans, trans_feat = self.feat(x)
+    x = self.relu(self.bn1(self.fc1(x)))
+    x = self.relu(self.bn2(self.dropout(self.fc2(x))))
+    return x
+
   def forward(self, x):
     x, trans, trans_feat = self.feat(x)
     x = F.relu(self.bn1(self.fc1(x)))

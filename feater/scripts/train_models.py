@@ -284,6 +284,8 @@ def parse_args():
     args.class_nr = 20
   elif args.data_type == "dual":
     args.class_nr = 400
+  elif args.data_type == "modelnet":
+    args.class_nr = 40
   else:
     raise ValueError(f"Unexpected data type {args.data_type}; Only single (FEater-Single) and dual (FEater-Dual) are supported")
   
@@ -307,9 +309,13 @@ def perform_training(training_settings: dict):
   # Load the datasets
   trainingfiles = utils.checkfiles(training_settings["training_data"])
   testfiles = utils.checkfiles(training_settings["test_data"])
-  if training_settings["dataloader_type"] in ("surface", "coord"):
-    training_data = DATALOADER_TYPES[training_settings["dataloader_type"]](trainingfiles, target_np=training_settings["pointnet_points"])
-    test_data = DATALOADER_TYPES[training_settings["dataloader_type"]](testfiles, target_np=training_settings["pointnet_points"])
+  if training_settings["dataloader_type"] in ("surface", "coord"): 
+    if training_settings["data_type"] == "modelnet": 
+      training_data = DATALOADER_TYPES[training_settings["dataloader_type"]](trainingfiles, target_np=training_settings["pointnet_points"], scale=True)
+      test_data = DATALOADER_TYPES[training_settings["dataloader_type"]](testfiles, target_np=training_settings["pointnet_points"], scale=True)
+    else: 
+      training_data = DATALOADER_TYPES[training_settings["dataloader_type"]](trainingfiles, target_np=training_settings["pointnet_points"])
+      test_data = DATALOADER_TYPES[training_settings["dataloader_type"]](testfiles, target_np=training_settings["pointnet_points"])
   elif MODEL_TYPE == "pointnet": 
     training_data = DATALOADER_TYPES[MODEL_TYPE](trainingfiles, target_np=training_settings["pointnet_points"])
     test_data = DATALOADER_TYPES[MODEL_TYPE](testfiles, target_np=training_settings["pointnet_points"])
@@ -363,6 +369,8 @@ def perform_training(training_settings: dict):
 
   # The loss function in the original training
   criterion = LOSS_FUNCTIONS.get(training_settings["loss_function"], nn.CrossEntropyLoss)()
+  print(f"Optimization function: {optimizer}")
+  print(f"Loss function: {criterion}")
 
   # Learning rate scheduler
   scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=training_settings["lr_decay_steps"], gamma=training_settings["lr_decay_rate"])
@@ -382,6 +390,10 @@ def perform_training(training_settings: dict):
     for batch_idx, batch in enumerate(training_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR)):
       retrieval_time = time.perf_counter() - st
       train_data, train_label = batch
+      if len(train_label) != BATCH_SIZE:
+        print(f"Skip the batch {batch_idx} due to the small batch size {len(train_label)}")
+        continue
+      # print(train_data.shape, train_label.shape)
       if isinstance(training_data, dataloader.CoordDataset) or isinstance(training_data, dataloader.SurfDataset):
         train_data = train_data.transpose(2, 1) 
       

@@ -1,3 +1,4 @@
+import re 
 import numpy as np
 import pytraj as pt
 import h5py as h5
@@ -8,7 +9,6 @@ class hdffile(h5.File):
   Wrapped up functions to read/write point data to HDF file
   """
   def __init__(self, filename, reading_flag):
-    # print(f"Opening HDF5 file '{filename}' in mode '{reading_flag}'")
     super().__init__(filename, reading_flag)
 
   # __enter__ and __exit__ are used to enable the "with" statement

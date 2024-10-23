@@ -28,7 +28,7 @@ def get_resnet_model(channel_in, resnettype: str, class_nr:int, ):
   model.conv1 = nn.Conv2d(channel_in, 64, kernel_size=7, stride=2, padding=3, bias=False) 
   nn.init.kaiming_normal_(model.conv1.weight, mode='fan_out', nonlinearity='relu')
 
-  fc_number = FCFeatureNumberMap.get(resnettype, 2048)
+  fc_number = FCFeatureNumberMap.get(resnettype, 512)
   model.fc = nn.Linear(fc_number, class_nr)
   return model
 
@@ -41,6 +41,25 @@ class ResNet(nn.Module):
     # Use get_resnet_model to initialize the model
     super(ResNet, self).__init__()
     self.model = get_resnet_model(channel_in, resnet_type, output_dim)
+    self.bn = nn.BatchNorm1d(FCFeatureNumberMap.get(resnet_type, 512))
+    self.relu = nn.ReLU()
+
+  def featurize(self, x):
+    # See ResNet: https://pytorch.org/vision/main/_modules/torchvision/models/resnet.html
+    x = self.model.conv1(x)
+    x = self.model.bn1(x)
+    x = self.model.relu(x)
+    x = self.model.maxpool(x)
+
+    x = self.model.layer1(x)
+    x = self.model.layer2(x)
+    x = self.model.layer3(x)
+    x = self.model.layer4(x)
+
+    x = self.model.avgpool(x)
+    x = self.relu(self.bn(torch.flatten(x, 1)))
+    return x
+
 
   def forward(self, x):
     return self.model(x)

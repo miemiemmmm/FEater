@@ -140,4 +140,6 @@ def label_counts(train_label):
       print(f"{0:^4d}", end=" | ")
   print("\n", end="")
 
-
+def get_lr(optimizer):
+  for param_group in optimizer.param_groups:
+    return param_group['lr']
