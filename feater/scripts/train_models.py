@@ -66,20 +66,32 @@ DATALOADER_TYPES = {
 
 
 
-def get_model(model_type:str, output_dim:int): 
+def get_model(model_type:str, output_dim:int, **kwargs): 
   if model_type == "pointnet":
     model = PointNetCls(output_dim)
 
   elif model_type == "pointnet2":
     from feater.models.pointnet2 import get_model as get_pointnet2_model
-    if DATALOADER_TYPE == "surface": 
-      rads = [0.5, 1.00]  # For surface-based training
-    elif DATALOADER_TYPE == "coord":
-      rads = [1.75, 3.60]  # For coordinate-based data
+    data_loader = kwargs.get("dataloader_type", None)
+    data_type = kwargs.get("data_type", None)
+    if data_loader is None:
+      raise ValueError("The dataloader type is not specified for the PointNet2 model") 
+    
+    if data_type == "modelnet":
+      print("Using the radii for the ModelNet40 dataset")
+      rads = [0.1, 0.25]
+    elif data_loader == "surface": 
+      rads = [0.5, 1.00]       # For surface-based training
+    elif data_loader == "coord":
+      rads = [1.75, 3.60]      # For coordinate-based data
     else: 
       raise ValueError(f"Unexpected dataloader type {DATALOADER_TYPE} for PointNet2 model; Only surface and coord are supported")
     print(f"Using the radii {rads} for the PointNet2 model")
-    model = get_pointnet2_model(output_dim, normal_channel=False, sample_nr = INPUT_POINTS, rads=rads)
+    if not INPUT_POINTS:
+      point_nr = kwargs.get("target_np", 1024) # Set default number of points
+    else: 
+      point_nr = INPUT_POINTS
+    model = get_pointnet2_model(output_dim, normal_channel=False, sample_nr = point_nr, rads=rads)
     
   elif model_type == "dgcnn":
     from feater.models.dgcnn import DGCNN_cls
@@ -183,9 +195,10 @@ def test_model(model, dataset, criterion, test_number, batch_size, use_cuda=1, p
       # For the PointNet, the data is in the shape of (B, 3, N)
       # Important: Swap the axis to make the coordinate as 3 input channels of the data
       # print(target.unique(return_counts=True))
-
+      # print(torch.mean(data, axis=0))
       if isinstance(dataset, dataloader.CoordDataset) or isinstance(dataset, dataloader.SurfDataset):
-        data = data.transpose(2, 1)  
+        # print("Transposing the data ...")
+        data = data.transpose(2, 1) 
       if use_cuda:
         data, target = data.cuda(), target.cuda()
 
@@ -324,7 +337,7 @@ def perform_training(training_settings: dict):
     test_data = DATALOADER_TYPES[MODEL_TYPE](testfiles)
   print(f"Training data size: {len(training_data)}; Test data size: {len(test_data)}; Batch size: {BATCH_SIZE}; Worker number: {WORKER_NR}")
 
-  classifier = get_model(MODEL_TYPE, training_settings["class_nr"])
+  classifier = get_model(MODEL_TYPE, training_settings["class_nr"], dataloader_type=training_settings["dataloader_type"], data_type=training_settings["data_type"])
   print(f"Classifier: {classifier}")
 
   # if (args.verbose > 0) or (not args.production): 
