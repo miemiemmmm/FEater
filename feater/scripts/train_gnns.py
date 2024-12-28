@@ -5,18 +5,20 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 
+import dgl
+from scipy.spatial.distance import pdist, squareform
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchvision
-import transformers
+# import transformers
 
 from torch.utils.tensorboard import SummaryWriter
 
 # Import models 
-from feater.models.pointnet import PointNetCls      
 from feater import dataloader, utils
 import feater
+import feater.models
 
 tensorboard_writer = None 
 args = None
@@ -61,102 +63,26 @@ DATALOADER_TYPES = {
 
   "coord": dataloader.CoordDataset, 
   "surface": dataloader.SurfDataset, 
+  "simplegcn": dataloader.CoordDataset, 
 }
 
-
-
-
-def get_model(model_type:str, output_dim:int, **kwargs): 
-  if model_type == "pointnet":
-    model = PointNetCls(output_dim)
-
-  elif model_type == "pointnet2":
-    from feater.models.pointnet2 import get_model as get_pointnet2_model
-    data_loader = kwargs.get("dataloader_type", None)
-    data_type = kwargs.get("data_type", None)
-    if data_loader is None:
-      raise ValueError("The dataloader type is not specified for the PointNet2 model") 
+def get_model(model_type:str, output_dim:int): 
+  if model_type == "vanillampnn": 
+    sys.path.append("/MieT5/tests/param_ml/param_ml/models")
+    from mpnn import VanillaMPNN
     
-    if data_type == "modelnet":
-      print("Using the radii for the ModelNet40 dataset")
-      rads = [0.1, 0.25]
-    elif data_loader == "surface": 
-      rads = [0.5, 1.00]       # For surface-based training
-    elif data_loader == "coord":
-      rads = [1.75, 3.60]      # For coordinate-based data
-    else: 
-      raise ValueError(f"Unexpected dataloader type {DATALOADER_TYPE} for PointNet2 model; Only surface and coord are supported")
-    print(f"Using the radii {rads} for the PointNet2 model")
-    if not INPUT_POINTS:
-      point_nr = kwargs.get("target_np", 1024) # Set default number of points
-    else: 
-      point_nr = INPUT_POINTS
-    model = get_pointnet2_model(output_dim, normal_channel=False, sample_nr = point_nr, rads=rads)
-    
-  elif model_type == "dgcnn":
-    from feater.models.dgcnn import DGCNN_cls
-    args = {
-      "k": 20, 
-      "emb_dims": 1024,
-      "dropout" : 0.25,
-    }
-    model = DGCNN_cls(args, output_channels=output_dim)
-  elif model_type == "paconv":
-    # NOTE: This is a special case due to the special dependency of the PAConv !!!!
-    if "/MieT5/tests/PAConv/obj_cls" not in sys.path:
-      sys.path.append("/MieT5/tests/PAConv/obj_cls")
-    from feater.models.paconv import PAConv
-    config = {
-      "k_neighbors": 20, 
-      "output_channels": output_dim,
-      "dropout": 0.25,
-    }
-    model = PAConv(config)
-  elif model_type == "voxnet":
-    from feater.models.voxnet import VoxNet
-    model = VoxNet(output_dim)
-  elif model_type == "deeprank":
-    from feater.models.deeprank import DeepRankNetwork
-    model = DeepRankNetwork(1, output_dim, 32)
-  elif model_type == "gnina":
-    from feater.models.gnina import GninaNetwork
-    model = GninaNetwork(output_dim)
-  elif model_type == "resnet":
-    from feater.models.resnet import ResNet
-    model = ResNet(1, output_dim, "resnet18")
-  elif model_type == "convnext":
-    from feater.models.convnext import ConvNeXt
-    """
-      in_chans=3, num_classes=1000, 
-      depths=[3, 3, 9, 3], dims=[96, 192, 384, 768], 
-      drop_path_rate=0.,  layer_scale_init_value=1e-6, 
-      head_init_scale=1.,
-    """
-    model = ConvNeXt(1, output_dim)
+    class VanillaMPNN_Cls(nn.Module):
+      def __init__(self, in_feats, h_feats, num_classes):
+        super(VanillaMPNN_Cls, self).__init__()
+        self.conv = VanillaMPNN(node_in_feats=in_feats, edge_in_feats=1, readout_type='graph', ntasks=num_classes)
+      
+      def forward(self, graph): 
+        node_feat = graph.ndata["pos"]
+        edge_feat = graph.edata["attr"]
+        pred = self.conv(graph, node_feat, edge_feat)
+        return pred
 
-  elif model_type == "convnext_iso":
-    from feater.models.convnext import ConvNeXt, ConvNeXtIsotropic
-    model = ConvNeXtIsotropic(1, output_dim)
-
-  elif model_type == "swintrans":
-    from transformers import SwinForImageClassification, SwinConfig
-    configuration = SwinConfig(
-      image_size = 128, 
-      num_channels = 1,
-      num_labels = output_dim,
-      window_size=4, 
-    )
-    model = SwinForImageClassification(configuration)
-
-  elif model_type == "ViT":
-    from transformers import ViTConfig, ViTForImageClassification
-    configuration = ViTConfig(
-      image_size = 128, 
-      num_channels = 1, 
-      num_labels = output_dim, 
-      window_size=4, 
-    )
-    model = ViTForImageClassification(configuration)
+    model = VanillaMPNN_Cls(3, 16, output_dim)
 
   else:
     raise ValueError(f"Unexpected model type {model_type}; Only voxnet, pointnet, resnet, and deeprank are supported")
@@ -183,7 +109,7 @@ def get_lr(optimizer):
     return param_group['lr']
 
 
-def test_model(model, dataset, criterion, test_number, batch_size, use_cuda=1, process_nr=32, return_pred=False):
+def test_model(model, dataset, criterion, test_number, batch_size, threshold = 2.0, use_cuda=1, process_nr=32, return_pred = False):
   test_loss = 0.0
   correct = 0
   c = 0
@@ -191,7 +117,7 @@ def test_model(model, dataset, criterion, test_number, batch_size, use_cuda=1, p
   if return_pred:
     pred_list = []
     label_list = []
-
+  
   with torch.no_grad():
     model.eval()
     for data, target in dataset.mini_batches(batch_size=batch_size, process_nr=process_nr):
@@ -199,21 +125,21 @@ def test_model(model, dataset, criterion, test_number, batch_size, use_cuda=1, p
       # For the PointNet, the data is in the shape of (B, 3, N)
       # Important: Swap the axis to make the coordinate as 3 input channels of the data
       # print(target.unique(return_counts=True))
-      # print(torch.mean(data, axis=0))
-      if isinstance(dataset, dataloader.CoordDataset) or isinstance(dataset, dataloader.SurfDataset):
-        # print("Transposing the data ...")
-        data = data.transpose(2, 1) 
+      _batch_size = len(data)
+      graph_list = []
+      for i in range(batch_size): 
+        if i >= _batch_size: 
+          break
+        graph_i = get_graph(data[i].numpy(), threshold)
+        graph_list.append(graph_i)
+        
+      data = dgl.batch(graph_list)
+
       if use_cuda:
-        data, target = data.cuda(), target.cuda()
+        data = data.to("cuda")
+        target = target.cuda()
 
       pred = model(data)
-
-      if isinstance(model, PointNetCls) or isinstance(pred, tuple):
-        pred = pred[0]
-      
-      # Get the logit if the huggingface models is used
-      if isinstance(pred, transformers.file_utils.ModelOutput): 
-        pred = pred.logits
       
       pred_choice = torch.argmax(pred, dim=1)
       if return_pred:
@@ -223,10 +149,10 @@ def test_model(model, dataset, criterion, test_number, batch_size, use_cuda=1, p
       if criterion is not None:
         test_loss += criterion(pred, target).item()
       else: 
-        test_loss += 0.0
+        test_loss += 0.0 
 
       # Increament the counter for test sample count
-      c_samples += len(data)
+      c_samples += _batch_size
       c += 1
       if c_samples >= test_number:
         break
@@ -236,6 +162,31 @@ def test_model(model, dataset, criterion, test_number, batch_size, use_cuda=1, p
       return test_loss, accuracy, np.asarray(pred_list), np.asarray(label_list)
     else:
       return test_loss, accuracy
+
+
+def get_graph(coord, threshold): 
+  # Mask the padded points (0, 0, 0)
+  mask = np.all(coord == 0, axis=1)
+  coord = coord[~mask]
+
+  # Obtain the adjacency matrix of the coordinates 
+  distance_matrix = squareform(pdist(coord))
+  adjacency_matrix = (distance_matrix < threshold).astype(int)
+  np.fill_diagonal(adjacency_matrix, 0)
+
+  # Create the graph 
+  src_nodes, dst_nodes = np.nonzero(adjacency_matrix)
+  graph = dgl.graph((src_nodes, dst_nodes), num_nodes=len(coord))
+  
+  # Define the node and edge attributes
+  graph.ndata['pos'] = torch.tensor(coord, dtype=torch.float32)
+  # Use uniformed node attribute 
+  graph.ndata['attr'] = torch.tensor(np.full((len(coord), 1), 1), dtype=torch.float32)
+  # Use the distance between edges as the edge attribute
+  graph.edata['attr'] = torch.tensor([np.linalg.norm(coord[src] - coord[dst]) for src, dst in zip(src_nodes, dst_nodes)], dtype=torch.float32).unsqueeze(1)
+  
+  graph = dgl.add_self_loop(graph)   # Add self-loop to the graph 
+  return graph
 
 
 def parse_args():
@@ -332,6 +283,8 @@ def perform_training(training_settings: dict):
   torch.manual_seed(training_settings["seed"])
   np.random.seed(training_settings["seed"])
 
+  BOND_THRESHOLD = 1.5
+
   # Load the datasets
   trainingfiles = utils.checkfiles(training_settings["training_data"])
   testfiles = utils.checkfiles(training_settings["test_data"])
@@ -350,16 +303,8 @@ def perform_training(training_settings: dict):
     test_data = DATALOADER_TYPES[MODEL_TYPE](testfiles)
   print(f"Training data size: {len(training_data)}; Test data size: {len(test_data)}; Batch size: {BATCH_SIZE}; Worker number: {WORKER_NR}")
 
-  classifier = get_model(MODEL_TYPE, training_settings["class_nr"], dataloader_type=training_settings["dataloader_type"], data_type=training_settings["data_type"])
+  classifier = get_model(MODEL_TYPE, training_settings["class_nr"])
   print(f"Classifier: {classifier}")
-
-  # if (args.verbose > 0) or (not args.production): 
-  #   if MODEL_TYPE in ["pointnet", "pointnet2", "dgcnn", "paconv"]:
-  #     tensorboard_writer.add_graph(classifier, torch.randn(1, 3, INPUT_POINTS))
-  #   elif MODEL_TYPE in ["voxnet", "deeprank", "gnina"]:
-  #     tensorboard_writer.add_graph(classifier, torch.randn(1, 1, 32, 32, 32))
-  #   elif MODEL_TYPE in ["resnet", "convnext", "convnext_iso", "swintrans", "ViT"]:
-  #     tensorboard_writer.add_graph(classifier, torch.randn(1, 1, 128, 128))
 
   # Use KaiMing He's initialization
   c = 0
@@ -416,36 +361,37 @@ def perform_training(training_settings: dict):
     for batch_idx, batch in enumerate(training_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR)):
       retrieval_time = time.perf_counter() - st
       train_data, train_label = batch
+
       if len(train_label) != BATCH_SIZE:
         print(f"Skip the batch {batch_idx} due to the small batch size {len(train_label)}")
         continue
-      # print(train_data.shape, train_label.shape)
-      if isinstance(training_data, dataloader.CoordDataset) or isinstance(training_data, dataloader.SurfDataset):
-        train_data = train_data.transpose(2, 1) 
+      else: 
+        graph_list = []
+        for i in range(BATCH_SIZE): 
+          graph_i = get_graph(train_data[i].numpy(), BOND_THRESHOLD)
+          graph_list.append(graph_i)
+        train_data = dgl.batch(graph_list)
       
-      # print(train_data.shape)  # For test purpose
       st_tr = time.perf_counter()
       if USECUDA:
-        train_data, train_label = train_data.cuda(), train_label.cuda()
+        train_data = train_data.to("cuda")
+        train_label = train_label.cuda()
+      
       optimizer.zero_grad()
       classifier = classifier.train()
       pred = classifier(train_data)
-      if isinstance(classifier, PointNetCls) or isinstance(pred, tuple):
-        pred = pred[0]
 
-      # Get the logit if the huggingface models is used 
-      if isinstance(pred, transformers.file_utils.ModelOutput): 
-        pred = pred.logits
-      # print(pred.shape, train_label.shape)  # For test purpose
+      # print(pred, train_label)
+      # print(pred.size(), train_label.size())
 
       loss = criterion(pred, train_label)
       loss.backward()
       optimizer.step()
       train_time = time.perf_counter() - st_tr
       
-      if batch_idx % (batch_nr // 8) == 0: 
-        loss_on_train, accuracy_on_train = test_model(classifier, training_data, criterion, 1024, BATCH_SIZE, USECUDA, WORKER_NR)
-        loss_on_test, accuracy_on_test = test_model(classifier, test_data, criterion, 1024, BATCH_SIZE, USECUDA, WORKER_NR)
+      if (batch_idx+1) % (batch_nr // 8) == 0: 
+        loss_on_train, accuracy_on_train = test_model(classifier, training_data, criterion, 1024, BATCH_SIZE, threshold = BOND_THRESHOLD, use_cuda=USECUDA, process_nr=WORKER_NR)
+        loss_on_test, accuracy_on_test = test_model(classifier, test_data, criterion, 1024, BATCH_SIZE, threshold = BOND_THRESHOLD, use_cuda=USECUDA, process_nr=WORKER_NR)
         jobmsg = f"Processing the block {batch_idx:>5d}/{batch_nr:<5d}; Loss: {loss_on_test:>6.4f}/{loss_on_train:<6.4f}; Accuracy: {accuracy_on_test:>6.4f}/{accuracy_on_train:<6.4f}; Time: {retrieval_time:>6.4f}/{train_time:<6.4f}; "
         if batch_idx > 0: 
           time_left = (time.perf_counter() - st_training) / (batch_idx + 1) * (batch_nr - batch_idx)
@@ -473,8 +419,8 @@ def perform_training(training_settings: dict):
     # Test the model on both the training set and the test set
     scheduler.step()
     print(f"Epoch {epoch} took {time.perf_counter() - st_training:6.2f} seconds to train. Current learning rate: {get_lr(optimizer):.6f}. ")
-    loss_on_train, accuracy_on_train = test_model(classifier, training_data, criterion, training_settings["test_number"], BATCH_SIZE, USECUDA, WORKER_NR)
-    loss_on_test, accuracy_on_test = test_model(classifier, test_data, criterion, training_settings["test_number"], BATCH_SIZE, USECUDA, WORKER_NR)
+    loss_on_train, accuracy_on_train = test_model(classifier, training_data, criterion, training_settings["test_number"], BATCH_SIZE, threshold = BOND_THRESHOLD, use_cuda=USECUDA, process_nr=WORKER_NR)
+    loss_on_test, accuracy_on_test = test_model(classifier, test_data, criterion, training_settings["test_number"], BATCH_SIZE, threshold = BOND_THRESHOLD, use_cuda=USECUDA, process_nr=WORKER_NR)
     print(f"Checking the Performance on Loss: {loss_on_test}/{loss_on_train}; Accuracy: {accuracy_on_test}/{accuracy_on_train} at {time.ctime()}")
     current_lr = get_lr(optimizer)
     
@@ -504,7 +450,7 @@ def perform_training(training_settings: dict):
       print(f"Please check if hyperparameters are set correctly or the initialization of the model is correct. ")
       break
     # Early stopping on high accuracy to avoid overfitting
-    if accuracy_on_test > 0.995: 
+    if accuracy_on_test > 0.995 and (epoch >  0.5 * EPOCH_NR): 
       print(f"Early stopping at epoch {epoch} due to the high accuracy on the test set (accuracy > 0.995)")
       break
 
@@ -530,17 +476,8 @@ if __name__ == "__main__":
   """
   Train with 
   
-  Train with pointnet-coord: 
-  python train_voxnet.py -m pointnet -train /diskssd/yzhang/FEater_Minisets/miniset_200/te_coord.txt -test /Weiss/FEater_Dual_PDBHDF/te.txt -o /tmp/testpointnet -w 24 -e 120 -b 128 -lr 0.001 --lr-decay-steps 30 --lr-decay-rate 0.5 --data-type dual --pointnet_points 48
-
-  Train with pointnet-surf: 
-  python train_voxnet.py -m pointnet -train /diskssd/yzhang/FEater_Minisets/miniset_200/te_surf.txt -test /Weiss/FEater_Dual_SURF/te.txt -o /tmp/testpointnet -w 24 -e 120 -b 128 -lr 0.001 --lr-decay-steps 30 --lr-decay-rate 0.5 --data-type dual --pointnet_points 2000 --dataloader-type surface
-
-  Training with VoxNet
-  python train_voxnet.py -m voxnet -train /Weiss/FEater_Data/FEater_Minisets/tr_single_vox.txt -test /Weiss/FEater_Single_VOX/te.txt -o /tmp/testvoxnet -w 24 -e 120 -b 128 -lr 0.001 --lr-decay-steps 30 --lr-decay-rate 0.5 --data-type single
-
-  Training with ResNet
-  python train_voxnet.py -m resnet -train /Weiss/FEater_Data/FEater_Minisets/tr_dual_hilb.txt -test /Weiss/FEater_Dual_HILB/te.txt -o /tmp/testresnet -w 24 -e 120 -b 128 -lr 0.005 --lr-decay-steps 30 --lr-decay-rate 0.5 --data-type dual
+  python /MieT5/MyRepos/FEater/feater/scripts/train_gnns.py -m simplegcn -train /Weiss/clustered_dual_10perclass/tr.txt -test /Weiss/clustered_dual_10perclass/te.txt -o /tmp/testpointnet -w 24 -e 120 -b 128 -lr 0.001 --lr-decay-steps 30 --lr-decay-rate 0.5 --data-type dual --pointnet-points 48 --dataloader-type coord
+  python /MieT5/MyRepos/FEater/feater/scripts/train_gnns.py -m simplegcn -train /Weiss/clustered_single_10perclass/tr.txt -test /Weiss/clustered_single_10perclass/te.txt -o /tmp/testpointnet -w 24 -e 120 -b 128 -lr 0.001 --lr-decay-steps 30 --lr-decay-rate 0.5 --data-type single --pointnet-points 24 --dataloader-type coord
   """
 
   args = parse_args()

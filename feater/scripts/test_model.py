@@ -160,7 +160,7 @@ def perform_testing(training_settings: dict):
     training_data = DATALOADER_TYPES[MODEL_TYPE](trainingfiles)
     test_data = DATALOADER_TYPES[MODEL_TYPE](testfiles)
   print(f"Training data size: {len(training_data)}; Test data size: {len(test_data)}; Batch size: {BATCH_SIZE}; Worker number: {WORKER_NR}")
-  print(">>>>", training_data, training_data.do_scaling, test_data.do_scaling)
+  print(">>>>", training_data, training_data.do_scaling)
 
   ###################
   # Load the model
@@ -188,10 +188,11 @@ def perform_testing(training_settings: dict):
   ####################
   test_number = training_settings["test_number"]
   if MODEL_TYPE == "vanillampnn":
+    threshold = 2.0
     print(f"Testing {MODEL_TYPE} with training dataset containing {min(test_number, len(training_data))} samples ...")
-    loss_on_train, accuracy_on_train = train_gnns.test_model(classifier, training_data, criterion, test_number, BATCH_SIZE, USECUDA, WORKER_NR) 
+    loss_on_train, accuracy_on_train = train_gnns.test_model(classifier, training_data, criterion, test_number, BATCH_SIZE, threshold=threshold, use_cuda=USECUDA, process_nr=WORKER_NR) 
     print(f"Testing {MODEL_TYPE} with test dataset containing {min(test_number, len(test_data))} samples ...")
-    loss_on_test, accuracy_on_test = train_gnns.test_model(classifier, test_data, criterion, test_number, BATCH_SIZE, USECUDA, WORKER_NR) 
+    loss_on_test, accuracy_on_test = train_gnns.test_model(classifier, test_data, criterion, test_number, BATCH_SIZE, threshold=threshold, use_cuda=USECUDA, process_nr=WORKER_NR) 
   else: 
     print(f"Testing {MODEL_TYPE} with training dataset containing {min(test_number, len(training_data))} samples ...")
     loss_on_train, accuracy_on_train = train_models.test_model(classifier, training_data, criterion, test_number, BATCH_SIZE, USECUDA, WORKER_NR) 
@@ -228,8 +229,13 @@ def get_predictions(training_settings: dict):
   trainingfiles = utils.checkfiles(training_settings["training_data"])
   testfiles = utils.checkfiles(training_settings["test_data"])
   if training_settings["dataloader_type"] in ("surface", "coord"):
-    training_data = DATALOADER_TYPES[training_settings["dataloader_type"]](trainingfiles, target_np=training_settings["pointnet_points"])
-    test_data = DATALOADER_TYPES[training_settings["dataloader_type"]](testfiles, target_np=training_settings["pointnet_points"])
+    if training_settings["data_type"] == "modelnet": 
+      print("Using the ModelNet dataset", trainingfiles, testfiles) 
+      training_data = DATALOADER_TYPES[training_settings["dataloader_type"]](trainingfiles, target_np=training_settings["pointnet_points"], scale=True)
+      test_data = DATALOADER_TYPES[training_settings["dataloader_type"]](testfiles, target_np=training_settings["pointnet_points"], scale=True)
+    else: 
+      training_data = DATALOADER_TYPES[training_settings["dataloader_type"]](trainingfiles, target_np=training_settings["pointnet_points"])
+      test_data = DATALOADER_TYPES[training_settings["dataloader_type"]](testfiles, target_np=training_settings["pointnet_points"])
   elif MODEL_TYPE == "pointnet": 
     training_data = DATALOADER_TYPES[MODEL_TYPE](trainingfiles, target_np=training_settings["pointnet_points"])
     test_data = DATALOADER_TYPES[MODEL_TYPE](testfiles, target_np=training_settings["pointnet_points"])
@@ -240,7 +246,11 @@ def get_predictions(training_settings: dict):
 
   ###################
   # Load the model
-  classifier = train_models.get_model(MODEL_TYPE, training_settings["class_nr"])
+  if MODEL_TYPE == "vanillampnn":
+    import train_gnns
+    classifier = train_gnns.get_model(MODEL_TYPE, training_settings["class_nr"])
+  else:
+    classifier = train_models.get_model(MODEL_TYPE, training_settings["class_nr"], dataloader_type=training_settings["dataloader_type"], data_type=training_settings["data_type"], target_np=training_settings["pointnet_points"])
   print(f"Classifier: {classifier}")
 
   ###################
@@ -251,70 +261,38 @@ def get_predictions(training_settings: dict):
     raise ValueError(f"Unexpected pretrained model {training_settings['pretrained']}")
   if USECUDA:
     classifier.cuda()
-  
-  results_train = np.full(len(training_data), -1, dtype=np.int32)
-  ground_truth_train = np.full(len(training_data), -1, dtype=np.int32)
-  results_test = np.full(len(test_data), -1, dtype=np.int32)
-  ground_truth_test = np.full(len(test_data), -1, dtype=np.int32)
-  with torch.no_grad():
-    classifier.eval()
-    c = 0
-    print("Getting the predictions from the training dataset")
-    for data, target in training_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR):
-      if isinstance(training_data, dataloader.CoordDataset) or isinstance(training_data, dataloader.SurfDataset):
-        data = data.transpose(2, 1)  
-      if USECUDA:
-        data, target = data.cuda(), target.cuda()
-      pred = classifier(data)
-      if isinstance(classifier, PointNetCls) or isinstance(pred, tuple):
-        pred = pred[0]
-      elif hasattr(pred, "logits"): 
-        # Get the logit if the huggingface models is used
-        pred = pred.logits
-      pred_choice = torch.argmax(pred, dim=1)
-      elem_nr = len(pred)
-      results_train[c:c+elem_nr] = pred_choice.cpu().detach().numpy()
-      ground_truth_train[c:c+elem_nr] = target.cpu().detach().numpy()
-      c += elem_nr
-    c = 0
-    print("Getting the predictions from the test dataset")
-    for data, target in test_data.mini_batches(batch_size=BATCH_SIZE, process_nr=WORKER_NR):
-      if isinstance(test_data, dataloader.CoordDataset) or isinstance(test_data, dataloader.SurfDataset):
-        data = data.transpose(2, 1)  
-      if USECUDA:
-        data, target = data.cuda(), target.cuda()
-      pred = classifier(data)
-      if isinstance(classifier, PointNetCls) or isinstance(pred, tuple):
-        pred = pred[0]
-      elif hasattr(pred, "logits"): 
-        # Get the logit if the huggingface models is used
-        pred = pred.logits
-      pred_choice = torch.argmax(pred, dim=1)
-      elem_nr = len(pred_choice)
-      results_test[c:c+elem_nr] = pred_choice.cpu().detach().numpy()
-      ground_truth_test[c:c+elem_nr] = target.cpu().detach().numpy()
 
-      c += elem_nr
-  
-  if -1 in results_train or -1 in results_test:
-    raise ValueError("Unexpected error in the prediction")
-  elif -1 in ground_truth_train or -1 in ground_truth_test:
-    raise ValueError("Unexpected error in the ground truth")
 
-  outfolder = training_settings["output_folder"]
-  pretrained_model_file = training_settings["pretrained"]
-  filename = os.path.basename(pretrained_model_file)
+  test_number = training_settings["test_number"]
+  threshold = training_settings["threshold"]
+  if MODEL_TYPE == "vanillampnn":
+    print(f"Testing {MODEL_TYPE} with training dataset containing {min(test_number, len(training_data))} samples ...")
+    loss_on_train, accuracy_on_train, pred_train, label_train = train_gnns.test_model(classifier, training_data, None, test_number, BATCH_SIZE, use_cuda=USECUDA, process_nr=WORKER_NR, threshold=threshold, return_pred=True) 
+    print(f"Testing {MODEL_TYPE} with test dataset containing {min(test_number, len(test_data))} samples ...")
+    loss_on_test, accuracy_on_test, pred_test, label_test = train_gnns.test_model(classifier, test_data, None, test_number, BATCH_SIZE, use_cuda=USECUDA, process_nr=WORKER_NR, threshold=threshold, return_pred=True) 
+  else: 
+    print(f"Testing {MODEL_TYPE} with training dataset containing {min(test_number, len(training_data))} samples ...")
+    loss_on_train, accuracy_on_train, pred_train, label_train = train_models.test_model(classifier, training_data, None, test_number, BATCH_SIZE, use_cuda=USECUDA, process_nr=WORKER_NR, return_pred=True) 
+    print(f"Testing {MODEL_TYPE} with test dataset containing {min(test_number, len(test_data))} samples ...")
+    loss_on_test, accuracy_on_test, pred_test, label_test = train_models.test_model(classifier, test_data, None, test_number, BATCH_SIZE, use_cuda=USECUDA, process_nr=WORKER_NR, return_pred=True) 
+
+  print(f"Checking the Performance on Loss: {loss_on_test}/{loss_on_train}; Accuracy: {accuracy_on_test}/{accuracy_on_train} at {time.ctime()}")
+  
   if "result_predictions" in training_settings:
     outfilename = training_settings["result_predictions"]
   else:
-    outfilename = filename.replace(".pth", "_results.h5")
+    outfolder = training_settings["output_folder"]
+    outfilename = os.path.basename(training_settings["pretrained"]).replace(".pth", "_results.h5")
     outfilename = os.path.join(outfolder, outfilename)
   print(f"Saving the results in {outfilename}")
   with h5.File(outfilename, "w") as f:
-    f.create_dataset("predicted_train", data=results_train, dtype=np.int32, chunks=True)
-    f.create_dataset("predicted_test", data=results_test, dtype=np.int32, chunks=True)
-    f.create_dataset("ground_truth_train", data=ground_truth_train, dtype=np.int32, chunks=True)
-    f.create_dataset("ground_truth_test", data=ground_truth_test, dtype=np.int32, chunks=True)
+    f.create_dataset("predicted_train", data=pred_train, dtype=np.int32, chunks=True)
+    f.create_dataset("predicted_test", data=pred_test, dtype=np.int32, chunks=True)
+    f.create_dataset("ground_truth_train", data=label_train, dtype=np.int32, chunks=True)
+    f.create_dataset("ground_truth_test", data=label_test, dtype=np.int32, chunks=True)
+  return True
+
+  
   
 
 if __name__ == "__main__":
